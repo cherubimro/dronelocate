@@ -1,0 +1,19 @@
+# runtime output
+logs/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# build/handoff artifacts -- docker save output is ~121 MB, do not commit it,
+# and the encrypted handoff zips are derived files (one of them is the same
+# 121 MB again). Nothing here belongs in history.
+*.tar.gz
+*.tar
+*.zip
+*.7z
+
+# local-only environment helper (paths are machine specific)
+env-uhd-py311.sh

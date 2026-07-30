@@ -1,0 +1,173 @@
+{
+  "site": "tm1",
+  "origin": {
+    "lat": 45.7489,
+    "lon": 21.2087,
+    "alt_m": 90.0
+  },
+  "_comment_geometry": "Nodes 5 and 8 sit high deliberately. Everything else is near ground level, so without them VDOP is roughly 25 and altitude is unrecoverable. Move them back to 8 m in this file and watch the vertical error in the console triple -- that is the coplanarity tax, and it is geometry, not software.",
+  "nodes": [
+    {
+      "id": "n01",
+      "enu": [
+        -2500.0,
+        -2200.0,
+        8.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n02",
+      "enu": [
+        100.0,
+        -2800.0,
+        12.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n03",
+      "enu": [
+        2600.0,
+        -1900.0,
+        6.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n04",
+      "enu": [
+        -2900.0,
+        400.0,
+        10.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n05",
+      "enu": [
+        0.0,
+        0.0,
+        45.0
+      ],
+      "role": "hw",
+      "gain_db": 36
+    },
+    {
+      "id": "n06",
+      "enu": [
+        2800.0,
+        600.0,
+        9.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n07",
+      "enu": [
+        -2200.0,
+        2500.0,
+        7.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n08",
+      "enu": [
+        200.0,
+        2900.0,
+        70.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n09",
+      "enu": [
+        2400.0,
+        2400.0,
+        11.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n10",
+      "enu": [
+        1200.0,
+        1100.0,
+        5.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    }
+  ],
+  "radio": {
+    "fc_hz": 2437000000,
+    "fs_sps": 20000000,
+    "bw_hz": 18000000,
+    "snippet_s": 0.01,
+    "wire_fmt": "ci8",
+    "detect_threshold_db": 8.0,
+    "_comment": "TinyB210 profile. AD9361 ceiling is 56 MHz; two channels over USB3 realistically sustains 30-40 Msps combined, so 20 Msps per channel is the safe planning number. 10 ms at 20 Msps = 400 KB per snippet in ci8."
+  },
+  "sim": {
+    "burst_hz": 2.0,
+    "clock_bias_sigma_s": 2e-08,
+    "clock_drift_ppm_sigma": 0.02,
+    "snr_db_at_1km": 25.0,
+    "track": {
+      "kind": "orbit",
+      "centre_enu": [
+        600.0,
+        -400.0,
+        95.0
+      ],
+      "radius_m": 900.0,
+      "period_s": 180.0,
+      "climb_m": 35.0
+    },
+    "clock_discipline": "gpsdo",
+    "pps_jitter_s": 1.5e-08,
+    "discipline_tau_s": 100.0,
+    "_comment_clock": "clock_discipline: gpsdo | holdover | free. gpsdo is a control loop, so error is BOUNDED jitter about UTC (Ornstein-Uhlenbeck, sigma=pps_jitter_s) -- what real GPSDO hardware does. holdover free-runs from the error held when lock was lost. free never disciplines at all and ramps without bound (0.02 ppm = 24 us in 20 min), which is what exposed the correlation-window bug. Switchable live from the console."
+  },
+  "solver": {
+    "alt_prior_m": 100.0,
+    "alt_prior_sigma_m": 60.0,
+    "min_nodes": 5,
+    "max_nodes": 7,
+    "group_window_ms": 400,
+    "quality_gate": true,
+    "quality_min": 8.0,
+    "robust": true,
+    "_comment_robust": "quality_gate drops a correlation whose peak does not stand out from the noise floor -- a LOST peak is wrong by microseconds and timing_sigma() cannot express that, so it hands garbage nearly full weight. robust applies Huber IRLS so an outlier that still gets through cannot dominate. Both are live-switchable from the console."
+  },
+  "hardware": {
+    "driver": "uhd",
+    "device_args": "type=b200",
+    "channels": [
+      0,
+      1
+    ],
+    "gain_db": 40,
+    "require_gps": true,
+    "gps_timeout_s": 180,
+    "array_baseline_m": 0.061,
+    "_comment_baseline": "61 mm is lambda/2 at 2.437 GHz, the widest spacing that keeps a two-element bearing unambiguous. Wider buys precision and costs uniqueness; phase_bearing() will enumerate the grating lobes rather than silently pick one.",
+    "cal_phase_rad": 0.0,
+    "_comment_cal": "Per-board constant. Split one source into both inputs, run hw_selftest.py --channels 0,1, and paste the reported phase delta here."
+  },
+  "capture": {
+    "mode": "scheduled",
+    "_comment": "scheduled = supernode names an absolute UTC instant and every node opens its window there. Only possible because UHD exposes PPS-referenced timestamps; with RTL-SDR or HackRF you must fall back to mode 'independent' plus reference-emitter calibration.",
+    "schedule_lead_s": 0.5,
+    "rate_hz": 2.0
+  }
+}
