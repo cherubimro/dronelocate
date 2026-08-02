@@ -1,8 +1,19 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # dronelocate — project context
 
 Passive RF localization of non-cooperative drones. Ten sensor nodes stream IQ
 to a central supernode over Zenoh; the supernode cross-correlates, solves TDOA
 for a 3D position, tracks it, and renders it in a browser console.
+
+There is no pytest/unittest suite and no linter config (no `pyproject.toml`,
+`.flake8`, `ruff.toml`). Correctness is verified by the scripts in "Run it"
+below — `validate_math.py` for solver accuracy, `validate_uhd_timing.py` for
+the UHD clock-offset convention, `smoke_test.sh` for one-shot pipeline health,
+and `hw_selftest.py` for the one hardware acceptance test that matters. Do not
+go looking for a test runner or lint command that isn't there.
 
 ## Environment
 
