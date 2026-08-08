@@ -1,0 +1,202 @@
+{
+  "site": "tm1",
+  "origin": {
+    "lat": 45.7489,
+    "lon": 21.2087,
+    "alt_m": 90.0
+  },
+  "_comment_geometry": "Nodes 5 and 8 sit high deliberately. Everything else is near ground level, so without them VDOP is roughly 25 and altitude is unrecoverable. Move them back to 8 m in this file and watch the vertical error in the console triple -- that is the coplanarity tax, and it is geometry, not software.",
+  "nodes": [
+    {
+      "id": "n01",
+      "enu": [
+        -2500.0,
+        -2200.0,
+        8.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n02",
+      "enu": [
+        100.0,
+        -2800.0,
+        12.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n03",
+      "enu": [
+        2600.0,
+        -1900.0,
+        6.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n04",
+      "enu": [
+        -2900.0,
+        400.0,
+        10.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n05",
+      "enu": [
+        0.0,
+        0.0,
+        45.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n06",
+      "enu": [
+        2800.0,
+        600.0,
+        9.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n07",
+      "enu": [
+        -2200.0,
+        2500.0,
+        7.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n08",
+      "enu": [
+        200.0,
+        2900.0,
+        70.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n09",
+      "enu": [
+        2400.0,
+        2400.0,
+        11.0
+      ],
+      "role": "sim",
+      "gain_db": 32
+    },
+    {
+      "id": "n10",
+      "enu": [
+        1200.0,
+        1100.0,
+        5.0
+      ],
+      "role": "hw",
+      "gain_db": 36
+    }
+  ],
+  "radio": {
+    "fc_hz": 2437000000,
+    "fs_sps": 2400000,
+    "bw_hz": 2000000,
+    "snippet_s": 0.01,
+    "wire_fmt": "ci8",
+    "detect_threshold_db": 8.0,
+    "cyclo_detect": true,
+    "_comment_cyclo": "Cyclic-prefix detector: keeps a burst the energy gate missed when the lag-N_u autocorrelation says OFDM is present (several dB of margin), and classifies it (uas_ofdm + n_useful/n_cp in the event's hw block). Doppler- and CFO-immune by construction."
+  },
+  "sim": {
+    "burst_hz": 2.0,
+    "clock_bias_sigma_s": 2e-08,
+    "clock_drift_ppm_sigma": 0.02,
+    "snr_db_at_1km": 25.0,
+    "track": {
+      "kind": "orbit",
+      "centre_enu": [
+        600.0,
+        -400.0,
+        95.0
+      ],
+      "radius_m": 900.0,
+      "period_s": 180.0,
+      "climb_m": 35.0
+    },
+    "clock_discipline": "gpsdo",
+    "pps_jitter_s": 1.5e-08,
+    "discipline_tau_s": 100.0,
+    "carrier": true,
+    "_comment_carrier": "Model the carrier: Doppler from emitter motion plus LO rate offset from the clock discipline. The orbit's ~31 m/s is ~250-400 Hz differential at 2.437 GHz -- enough to null a 10 ms cross-correlation unless the correlator searches Doppler (solver.caf). false restores the old baseband-only sim.",
+    "waveform": "ofdm",
+    "_comment_waveform": "ofdm = CP-OFDM burst (OcuSync-shaped: QPSK data, fixed pilots, CP 16/128). Gives GCC-HT and the cyclostationary detector real structure. noise = the old flat Gaussian burst, the cleaner choice when isolating solver behaviour.",
+    "interference": {
+      "enabled": false,
+      "inr_db": 20.0,
+      "width_hz": 500000.0
+    },
+    "_comment_interference": "Per-node local interferer (each node's own Wi-Fi neighbour, distinct centre per node -- NOT a common illuminator, which is the case GCC weighting cannot fix). Off by default so the documented baseline stays clean; set enabled true and toggle GCC-HT in the console to watch the weighting earn its keep.",
+    "_comment_clock": "clock_discipline: gpsdo | holdover | free. gpsdo is a control loop, so error is BOUNDED jitter about UTC (Ornstein-Uhlenbeck, sigma=pps_jitter_s) -- what real GPSDO hardware does. holdover free-runs from the error held when lock was lost. free never disciplines at all and ramps without bound (0.02 ppm = 24 us in 20 min), which is what exposed the correlation-window bug. Switchable live from the console.",
+    "multipath": {
+      "enabled": false,
+      "taps": 3,
+      "tau_rms_s": 2e-07,
+      "rician_k_db": 8.0
+    },
+    "_comment_multipath": "Per-node reflection taps, drawn ONCE per node and reused -- reflectors are fixed geometry, so the bias is static and does not average away. Off by default; the documented baseline assumes free space. Turning it on at 2 MHz costs ~4.6 m horizontal and ~114 m vertical and cannot be fixed by peak-picking: at c/B = 150 m the echoes are unresolvable. Bandwidth is the defence -- 18 MHz brings it to 0.26 m / 35 m."
+  },
+  "solver": {
+    "alt_prior_m": 100.0,
+    "alt_prior_sigma_m": 60.0,
+    "min_nodes": 5,
+    "max_nodes": 7,
+    "group_window_ms": 400,
+    "quality_gate": true,
+    "quality_min": 8.0,
+    "robust": true,
+    "caf": true,
+    "caf_vmax_mps": 60.0,
+    "_comment_caf": "Cross-ambiguity: correlate over lag AND differential Doppler, then derotate before the precise lag estimate. Needed the moment the carrier is modelled (sim.carrier) or on any real moving emitter; caf_vmax_mps bounds the Doppler search span, scaled by the event's fc.",
+    "all_pairs": true,
+    "_comment_all_pairs": "Correlate every node pair and solve GLS with the full covariance (pair_covariance), instead of everyone-vs-reference with diagonal weights that treat the shared reference's noise as independent per row. ~3.5x the correlation work for 7 nodes.",
+    "tight_coupling": true,
+    "_comment_tight": "A burst with 1-2 surviving pairs cannot produce a fix but still constrains an existing track: feed its TDOA rows to the EKF directly, innovation-gated. Recovers the bursts the starved counter used to discard.",
+    "gcc": "ht",
+    "_comment_gcc": "Hannan-Thomson GCC weighting from per-node Welch PSDs, applied on the cached-spectra fast path. ht | none. Needs a structured waveform (sim.waveform ofdm) to do anything; the win case is per-node interference, whose bins carry no cross-channel signal and get crushed.",
+    "_comment_robust": "quality_gate drops a correlation whose peak does not stand out from the noise floor -- a LOST peak is wrong by microseconds and timing_sigma() cannot express that, so it hands garbage nearly full weight. robust applies Huber IRLS so an outlier that still gets through cannot dominate. Both are live-switchable from the console."
+  },
+  "_comment_profile": "Full sim fleet plus ONE real B210, for bench work without a GPS antenna. Start with: CONFIG=config/site-mixed-b210.json ./run_demo.sh --hw n10 --hw-source uhd (prefix PYTHON=/usr/bin/python3 if a virtualenv is on PATH). Built on the 10-node site.json ON PURPOSE, not on site-laptop.json. --hw REPLACES a simulated node rather than adding one, and the real radio hears the live band while the emulated nodes hear the simulated emitter -- so its correlations cannot match, the quality gate discards them, and it contributes nothing to the fix. The base profile must therefore carry margin above solver.min_nodes on its own. Derived from the 7-node laptop profile it left 6 contributors against a floor of 5, and any two nodes missing a burst dropped the whole burst: the track visibly caught the target and lost it again. Ten nodes leaves nine contributors, which is the configuration the measured baseline uses. NOT a field profile: capture.mode is 'independent', so nodes share no time base and inter-node TDOA from the hardware node is meaningless. config/site-b210.json remains the deployment profile.",
+  "hardware": {
+    "driver": "uhd",
+    "device_args": "type=b200",
+    "channels": [
+      0,
+      1
+    ],
+    "gain_db": 40,
+    "require_gps": false,
+    "gps_timeout_s": 5.0,
+    "array_baseline_m": 0.061,
+    "_comment_baseline": "61 mm is lambda/2 at 2.437 GHz, the widest spacing that keeps a two-element bearing unambiguous. Wider buys precision and costs uniqueness; phase_bearing() will enumerate the grating lobes rather than silently pick one.",
+    "cal_phase_rad": 0.0,
+    "_comment_cal": "Per-board constant. Split one source into both inputs, run hw_selftest.py --channels 0,1, and paste the reported phase delta here.",
+    "_comment_require_gps": "false = proceed without GPSDO lock. This does NOT skip the wait: _discipline_to_gps still polls for gps_timeout_s and then warns instead of raising. Keep the timeout short on the bench -- the stock 180 s is indistinguishable from a hang, and it ends in a traceback that kills the node while the rest of the fleet keeps running."
+  },
+  "capture": {
+    "mode": "independent",
+    "schedule_lead_s": 0.5,
+    "rate_hz": 2.0,
+    "_comment": "independent because scheduled capture needs a PPS-aligned device clock, which needs GPS lock. node.py refuses 'scheduled' without it rather than producing buffers that look simultaneous and are not."
+  }
+}

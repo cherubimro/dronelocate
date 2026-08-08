@@ -1,0 +1,7 @@
+logs/
+__pycache__/
+**/__pycache__/
+*.pyc
+.git/
+*.tar.gz
+env-uhd-py311.sh

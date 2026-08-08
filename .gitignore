@@ -1,0 +1,36 @@
+# runtime output
+logs/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# build/handoff artifacts -- docker save output is ~121 MB, do not commit it,
+# and the encrypted handoff zips are derived files (one of them is the same
+# 121 MB again). Nothing here belongs in history.
+*.tar.gz
+*.tar
+*.zip
+*.7z
+
+# local-only environment helper (paths are machine specific)
+env-uhd-py311.sh
+
+# LaTeX intermediates. theory.pdf and zenoh-protocol.pdf ARE tracked
+# deliberately -- most readers will not have a TeX install -- so rebuild and
+# commit the PDF whenever its .tex changes, or the two drift apart silently.
+# Build with: pdflatex <name>.tex (twice, for cross-references)
+*.aux
+*.toc
+*.out
+*.synctex.gz
+theory.log
+zenoh-protocol.log
+
+# console/cache/ is deliberately NOT ignored. The baked OpenStreetMap
+# footprints are committed so the 3D layer works offline and out of the box
+# rather than depending on a free API that refuses whole cities under load.
+# They stay under ODbL, not this repository's AGPLv3 -- see
+# console/cache/README.md, which is the attribution the licence requires.

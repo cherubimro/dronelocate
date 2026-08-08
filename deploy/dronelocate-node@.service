@@ -1,0 +1,65 @@
+[Unit]
+# One sensor node. Templated on the node id, so:
+#     systemctl enable --now dronelocate-node@n03
+# The id must match an "id" in the site config -- the node looks up its own
+# surveyed position there, and a name that is not in the config is a hard
+# error rather than a default.
+Description=dronelocate sensor node %i
+After=network-online.target
+Wants=network-online.target
+
+# Never stop retrying. A node is deliberately built to survive the supernode
+# being absent: zconf.spoke() sets an infinite connect timeout with 500 ms ->
+# 4 s backoff, so a sensor on a flaky link rejoins by itself. systemd's
+# default start-limit would defeat that by giving up after 5 restarts.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=@@DIR@@
+User=@@USER@@
+
+# HUB, PORT, CONFIG, PYTHON and SOURCE come from here. The per-node file is
+# optional (leading '-') and overrides the shared one, which is how a single
+# fleet mixes emulated nodes with one real radio: set SOURCE=uhd in
+# /etc/default/dronelocate-n10 and leave every other node alone.
+EnvironmentFile=@@ENVDIR@@/dronelocate
+EnvironmentFile=-@@ENVDIR@@/dronelocate-%i
+
+# Python block-buffers stdout when it is not a terminal, and under systemd it
+# never is -- so without this, journalctl shows nothing for minutes and the
+# node looks hung when it is working fine. This exact trap has already cost
+# time in this project twice.
+Environment=PYTHONUNBUFFERED=1
+
+# sh -c because the interpreter is a variable: it may be /usr/bin/python3 on
+# Debian, or a virtualenv's python on Ubuntu where apt's python3-uhd is only
+# visible to a venv created with --system-site-packages. exec so systemd
+# tracks the python process itself rather than a surviving shell.
+ExecStart=/bin/sh -c 'exec "$PYTHON" node.py --config "$CONFIG" --node %i --source "$SOURCE" --hub "$HUB" --port "$PORT"'
+
+Restart=always
+RestartSec=5
+
+# SIGINT, not SIGTERM: node.py's shutdown path is a KeyboardInterrupt handler
+# that closes the Zenoh session cleanly. TimeoutStopSec then covers the case
+# where a UHD streamer is mid-recv and does not return promptly.
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+# A USRP's device node is root:usrp (UHD's udev rules use GROUP:="usrp",
+# MODE:="0660"). Harmless on an emulated node; required on a real one, and
+# omitting it produces "USB open failed: insufficient permissions" from
+# inside the node log rather than anywhere obvious.
+SupplementaryGroups=usrp
+
+# Modest hardening. Not a sandbox -- the node needs USB and the network --
+# but there is no reason for it to write outside its own directory.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=@@DIR@@
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>dronelocate — site tm1</title>
+<style>
+  :root{
+    --ink:#0b1016; --ink2:#111924; --rule:#1e2a38; --rule2:#2b3b4d;
+    --paper:#dde6ef; --dim:#65798f; --survey:#ff7a3d; --truth:#3fcfc0;
+    --warn:#f2c14e; --bad:#e8546b; --hw:#ff3ce0;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--ink);color:var(--paper);
+    font-family:var(--mono);font-size:12px;overflow:hidden}
+  #view{position:fixed;inset:0}
+
+  .panel{position:fixed;background:rgba(11,16,22,.82);
+    border:1px solid var(--rule);backdrop-filter:blur(6px);z-index:10}
+  .hd{font-size:9px;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--dim);padding:8px 12px;border-bottom:1px solid var(--rule)}
+
+  /* left rail: node fleet */
+  #fleet{top:16px;left:16px;width:236px}
+  #fleet ul{list-style:none}
+  #fleet li{display:grid;grid-template-columns:34px 1fr auto;gap:8px;
+    align-items:center;padding:5px 12px;border-bottom:1px solid rgba(30,42,56,.5)}
+  #fleet li:last-child{border-bottom:0}
+  .nid{color:var(--dim)}
+  .bar{height:3px;background:var(--rule);position:relative;overflow:hidden}
+  .bar i{position:absolute;inset:0 100% 0 0;background:var(--survey);
+    transition:right .3s ease}
+  .used .nid{color:var(--survey)}
+  /* the reference node keeps its own shade: everything else in a fix is a
+     correlation *against* it, so it is not just one more contributor */
+  .refn .nid{color:var(--hi);font-weight:600}
+  .stale .nid{color:var(--bad)}
+  /* A real radio in the fleet. Wins over used/refn/stale because "this one
+     is hardware" is the standing fact about the node, while the others are
+     per-burst roles that change every fix. */
+  .hwnode .nid{color:var(--hw)!important;font-weight:600}
+  .hwnode .nid::after{content:' \25C6';font-size:9px;vertical-align:1px}
+  .hwnode .bar i{background:var(--hw)}
+  .val{color:var(--dim);font-variant-numeric:tabular-nums;font-size:11px}
+
+  /* solution readout */
+  #sol{bottom:16px;left:16px;width:308px}
+  #sol dl{display:grid;grid-template-columns:auto 1fr;gap:2px 14px;padding:10px 12px}
+  #sol dt{color:var(--dim);font-size:10px;letter-spacing:.06em}
+  #sol dd{text-align:right;font-variant-numeric:tabular-nums}
+  .big{font-size:19px;letter-spacing:-.02em}
+  .sep{grid-column:1/-1;height:1px;background:var(--rule);margin:6px 0}
+
+  /* pipeline stats */
+  #stats{top:16px;right:16px;width:216px}
+  #stats dl{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:10px 12px}
+  #stats dt{color:var(--dim);font-size:10px}
+  #stats dd{text-align:right;font-variant-numeric:tabular-nums}
+
+  /* controls */
+  #ctl{bottom:16px;right:16px;width:216px;padding:10px 12px}
+  #ctl label{display:flex;justify-content:space-between;align-items:center;
+    color:var(--dim);font-size:10px;margin-bottom:8px;letter-spacing:.06em}
+  #ctl input[type=range]{width:96px;accent-color:var(--survey)}
+  #ctl select{background:var(--ink2);color:var(--paper);border:1px solid var(--rule2);
+    font-family:var(--mono);font-size:10px;padding:3px 4px;width:120px}
+  #ctl .tog{display:flex;gap:6px;margin-top:4px}
+  /* Buttons wrap onto their own rows by group. Five across a 216px panel
+     overflowed the panel and pushed the last one off screen. */
+  #ctl .seclab{color:var(--dim);font-size:9px;letter-spacing:.14em;
+    margin-top:10px;margin-bottom:2px;text-transform:uppercase;opacity:.75}
+  #ctl button{flex:1;background:transparent;border:1px solid var(--rule2);
+    color:var(--dim);font-family:var(--mono);font-size:10px;padding:5px 0;
+    cursor:pointer;letter-spacing:.08em}
+  #ctl button.on{border-color:var(--survey);color:var(--survey)}
+  #ctl button:focus-visible{outline:2px solid var(--survey);outline-offset:1px}
+
+  #banner{position:fixed;top:16px;left:50%;transform:translateX(-50%);
+    padding:7px 16px;border:1px solid var(--warn);color:var(--warn);
+    background:rgba(11,16,22,.9);letter-spacing:.14em;font-size:10px;
+    text-transform:uppercase;z-index:20;display:none}
+  .legend{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);
+    display:flex;gap:20px;color:var(--dim);font-size:10px;letter-spacing:.1em;z-index:10}
+  .legend i{display:inline-block;width:8px;height:8px;margin-right:6px;
+    vertical-align:middle}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+  @media (max-width:900px){#fleet,#stats,#ctl{display:none}#sol{width:auto;right:16px}}
+</style>
+</head>
+<body>
+<div id="view"></div>
+
+<div class="panel" id="fleet">
+  <div class="hd">Sensor fleet</div>
+  <ul id="fleetlist"></ul>
+</div>
+
+<div class="panel" id="sol">
+  <div class="hd">Solution — track <span id="tid">—</span></div>
+  <dl>
+    <dt>Latitude</dt><dd class="big" id="lat">—</dd>
+    <dt>Longitude</dt><dd class="big" id="lon">—</dd>
+    <dt>Altitude</dt><dd class="big" id="alt">—</dd>
+    <div class="sep"></div>
+    <dt>σ horizontal</dt><dd id="sh">—</dd>
+    <dt>σ vertical</dt><dd id="sv">—</dd>
+    <dt>HDOP / VDOP</dt><dd id="dop">—</dd>
+    <dt>Residual</dt><dd id="res">—</dd>
+    <dt>Nodes used</dt><dd id="nu">—</dd>
+    <div class="sep"></div>
+    <dt>Error vs truth</dt><dd id="err">—</dd>
+  </dl>
+</div>
+
+<div class="panel" id="stats">
+  <div class="hd">Pipeline</div>
+  <dl>
+    <dt>Ingest</dt><dd id="mbps">—</dd>
+    <dt>IQ pulled</dt><dd id="pulled">—</dd>
+    <dt>Pull latency</dt><dd id="plat">—</dd>
+    <dt>Solve time</dt><dd id="slat">—</dd>
+    <dt>Fixes / bursts</dt><dd id="fb">—</dd>
+    <dt>Median err h</dt><dd id="eh">—</dd>
+    <dt>Median err v</dt><dd id="ev">—</dd>
+  </dl>
+</div>
+
+<div class="panel" id="ctl">
+  <label>Vertical exaggeration <span id="vexlab">×6</span>
+    <input id="vex" type="range" min="1" max="20" value="6"></label>
+  <label>Trail length <span id="trlab">120</span>
+    <input id="trail" type="range" min="10" max="400" value="120"></label>
+  <div class="tog">
+    <button id="btnEll" class="on">Ellipsoid</button>
+    <button id="btnTruth" class="on">Truth</button>
+    <button id="btnRays" class="on">Rays</button>
+  </div>
+
+  <div class="seclab">Basemap (cosmetic)</div>
+  <label>City <select id="citysel"></select></label>
+  <div class="tog">
+    <button id="btnMap" title="Drape OpenStreetMap raster tiles over the survey plane. Cosmetic only -- nothing in the solve path reads it. Needs network on first use; everything else here works offline.">Map</button>
+    <button id="btn3D" title="Extrude OpenStreetMap building footprints over the central 5 km. Instant if baked with tools/fetch_buildings.py; otherwise fetched live from the public Overpass API, which takes a couple of minutes and competes with the simulation for CPU. Only a small fraction of footprints carry a surveyed height, so most of the skyline is a 9 m default: a plausible city, not a survey.">3D</button>
+  </div>
+
+  <div class="seclab">Solver</div>
+  <div class="tog">
+    <button id="btnGate" title="Reject a correlation whose peak does not stand out from the noise floor. A lost peak is wrong by microseconds and timing_sigma() cannot express that.">Quality gate</button>
+    <button id="btnRobust" title="Huber IRLS: bound the influence of an outlier that got past the gate, e.g. a node with a wrong surveyed position.">Robust fit</button>
+    <button id="btnCaf" title="Cross-ambiguity: search differential Doppler as well as lag. A moving emitter shifts each node's carrier differently; without this the correlation peak is biased first and nulled outright at speed.">CAF</button>
+    <button id="btnGcc" title="Hannan-Thomson GCC weighting: emphasise frequencies where both channels carry signal, crush noise-only and interference bins. A no-op on flat spectra; pays on OFDM structure and per-node interference.">GCC-HT</button>
+  </div>
+
+  <div class="seclab">Node clocks (sim)</div>
+  <div class="tog">
+    <button id="btnClkGps" title="GPSDO disciplined: a control loop, so error is bounded jitter about UTC. What the TinyB210 actually does.">GPSDO</button>
+    <button id="btnClkHold" title="GPS lock lost: free-runs from the error held at the moment of loss, at the oscillator's own drift rate.">Holdover</button>
+    <button id="btnClkFree" title="Never disciplined: unbounded linear ramp. 0.02 ppm reaches 24 us in 20 min.">Free</button>
+  </div>
+</div>
+
+<div id="banner"></div>
+<div class="legend">
+  <span><i style="background:#ff7a3d"></i>Solved</span>
+  <span><i style="background:#3fcfc0"></i>Truth</span>
+  <span><i style="background:#65798f"></i>Sensor node</span>
+  <span id="vexnote">Vertical ×6</span>
+  <span id="osmcredit" style="display:none">© OpenStreetMap contributors</span>
+</div>
+
+<script type="importmap">
+{"imports":{"three":"./vendor/three.module.js",
+            "three/addons/controls/OrbitControls.js":"./vendor/OrbitControls.js"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const C = { survey:0xff7a3d, truth:0x3fcfc0, node:0x65798f, rule:0x1e2a38,
+            hi:0xffb184, bad:0xe8546b, hw:0xff3ce0 };
+
+// ---- scene ---------------------------------------------------------------
+const view = document.getElementById('view');
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x0b1016, 6000, 16000);
+const cam = new THREE.PerspectiveCamera(46, innerWidth/innerHeight, 1, 40000);
+cam.position.set(2600, 2100, 3400);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x0b1016);
+view.appendChild(renderer.domElement);
+const controls = new OrbitControls(cam, renderer.domElement);
+controls.enableDamping = true; controls.dampingFactor = 0.06;
+controls.maxPolarAngle = Math.PI*0.495;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+const key = new THREE.DirectionalLight(0xffffff, 0.55);
+key.position.set(1,2,1); scene.add(key);
+
+// ground: hairline grid, no fill. The grid is the survey plane, so its
+// spacing is labelled in real metres rather than being decorative.
+const grid = new THREE.GridHelper(8000, 16, C.rule, 0x141d27);
+grid.material.transparent = true; grid.material.opacity = 0.9;
+scene.add(grid);
+
+// axes hint at ENU orientation without a compass rose
+function axis(dir, colour, len){
+  const g = new THREE.BufferGeometry().setFromPoints(
+    [new THREE.Vector3(0,0,0), dir.clone().multiplyScalar(len)]);
+  const l = new THREE.Line(g, new THREE.LineBasicMaterial({color:colour,
+    transparent:true, opacity:0.5}));
+  scene.add(l);
+}
+axis(new THREE.Vector3(1,0,0), 0x2b3b4d, 4200);   // East
+axis(new THREE.Vector3(0,0,-1), 0x2b3b4d, 4200);  // North
+
+let VEX = 6;                       // vertical exaggeration
+const E = (enu) => new THREE.Vector3(enu[0], enu[2]*VEX, -enu[1]);
+
+// ---- node markers --------------------------------------------------------
+const nodeObjs = {};
+async function buildNodes(){
+  const cfg = await (await fetch('/config')).json();
+  for (const n of cfg.nodes){
+    const g = new THREE.Group();
+    // a mast, drawn to true height. Two nodes here are elevated on purpose;
+    // without them the vertical solution is unobservable.
+    const mast = new THREE.Mesh(
+      new THREE.CylinderGeometry(3,3,1,6),
+      new THREE.MeshBasicMaterial({color:C.node, transparent:true, opacity:.55}));
+    const head = new THREE.Mesh(
+      new THREE.OctahedronGeometry(34),
+      new THREE.MeshBasicMaterial({color:C.node, wireframe:true}));
+    g.add(mast); g.add(head);
+    scene.add(g);
+    nodeObjs[n.id] = {g, mast, head, enu:n.enu};
+    const li = document.createElement('li');
+    li.id = 'fl-'+n.id;
+    li.innerHTML = `<span class="nid">${n.id}</span>
+      <span class="bar"><i></i></span><span class="val">—</span>`;
+    document.getElementById('fleetlist').appendChild(li);
+  }
+  layoutNodes();
+}
+function layoutNodes(){
+  for (const k in nodeObjs){
+    const o = nodeObjs[k], h = o.enu[2]*VEX;
+    o.g.position.set(o.enu[0], 0, -o.enu[1]);
+    o.mast.scale.y = Math.max(h,1); o.mast.position.y = h/2;
+    o.head.position.y = h;
+  }
+}
+
+// ---- solved target -------------------------------------------------------
+const target = new THREE.Mesh(new THREE.SphereGeometry(26, 20, 14),
+  new THREE.MeshBasicMaterial({color:C.survey}));
+scene.add(target);
+
+// Signature element: the covariance ellipsoid, drawn true to the solver's
+// 3x3 output. It is nearly always a tall thin cigar, because ground-level
+// sensors constrain the vertical far worse than the horizontal. Reading
+// "VDOP 16" is abstract; seeing the ellipsoid stretch is not.
+const ell = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 20),
+  new THREE.MeshBasicMaterial({color:C.survey, wireframe:true,
+    transparent:true, opacity:.24}));
+scene.add(ell);
+
+const drop = new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+  new THREE.LineDashedMaterial({color:C.survey, dashSize:26, gapSize:18,
+    transparent:true, opacity:.65}));
+scene.add(drop);
+const shadow = new THREE.Mesh(new THREE.RingGeometry(20, 26, 28),
+  new THREE.MeshBasicMaterial({color:C.survey, transparent:true, opacity:.4,
+    side:THREE.DoubleSide}));
+shadow.rotation.x = -Math.PI/2; scene.add(shadow);
+
+const truthMark = new THREE.Mesh(new THREE.OctahedronGeometry(30),
+  new THREE.MeshBasicMaterial({color:C.truth, wireframe:true}));
+scene.add(truthMark);
+
+let TRAIL = 120;
+const trailPts = [];
+const trailGeo = new THREE.BufferGeometry();
+const trail = new THREE.Line(trailGeo,
+  new THREE.LineBasicMaterial({color:C.survey, transparent:true, opacity:.55}));
+scene.add(trail);
+
+// rays from contributing nodes: brightness encodes correlation quality, so a
+// node that is technically in the solution but barely correlating looks like it
+const rayGroup = new THREE.Group(); scene.add(rayGroup);
+
+// ---- telemetry -----------------------------------------------------------
+const fmt = (v,d=1) => (v===null||v===undefined||Number.isNaN(v)) ? '—' : v.toFixed(d);
+const $ = id => document.getElementById(id);
+let lastMsg = 0;
+
+const mul3 = (A,B) => A.map(r => [0,1,2].map(j => r[0]*B[0][j] + r[1]*B[1][j] + r[2]*B[2][j]));
+const tr3  = A => [0,1,2].map(i => [0,1,2].map(j => A[j][i]));
+const det3 = A => A[0][0]*(A[1][1]*A[2][2]-A[1][2]*A[2][1])
+                - A[0][1]*(A[1][0]*A[2][2]-A[1][2]*A[2][0])
+                + A[0][2]*(A[1][0]*A[2][1]-A[1][1]*A[2][0]);
+
+function eigen3(m){
+  // symmetric 3x3 -> {vectors, values} via Jacobi; small and exact enough
+  let a = m.map(r=>r.slice()), v = [[1,0,0],[0,1,0],[0,0,1]];
+  for (let s=0;s<24;s++){
+    let p=0,q=1,off=0;
+    for(let i=0;i<3;i++) for(let j=i+1;j<3;j++){
+      if (Math.abs(a[i][j])>off){off=Math.abs(a[i][j]);p=i;q=j;} }
+    if (off<1e-12) break;
+    const th = 0.5*Math.atan2(2*a[p][q], a[q][q]-a[p][p]);
+    const c = Math.cos(th), sn = Math.sin(th);
+    const A = a.map(r=>r.slice());
+    for(let k=0;k<3;k++){
+      A[p][k] = c*a[p][k]-sn*a[q][k]; A[q][k] = sn*a[p][k]+c*a[q][k]; }
+    const B = A.map(r=>r.slice());
+    for(let k=0;k<3;k++){
+      B[k][p] = c*A[k][p]-sn*A[k][q]; B[k][q] = sn*A[k][p]+c*A[k][q]; }
+    a = B;
+    const V = v.map(r=>r.slice());
+    for(let k=0;k<3;k++){
+      V[k][p] = c*v[k][p]-sn*v[k][q]; V[k][q] = sn*v[k][p]+c*v[k][q]; }
+    v = V;
+  }
+  return {values:[a[0][0],a[1][1],a[2][2]], vectors:v};
+}
+
+function onTrack(d, health, stats){
+  lastMsg = performance.now();
+  const p = E(d.enu);
+  target.position.copy(p);
+  shadow.position.set(p.x, 0.6, p.z);
+  drop.geometry.setFromPoints([new THREE.Vector3(p.x,0,p.z), p]);
+  drop.computeLineDistances();
+
+  // 1-sigma ellipsoid from the covariance, with the same vertical
+  // exaggeration applied to the vertical semi-axis so it stays honest
+  // The covariance is in ENU metres, but the scene is (x=E, y=Up*VEX, z=-N).
+  // Decomposing the ENU covariance and then applying those eigenvectors as a
+  // scene rotation mixes the axes -- an ENU "up" eigenvector ends up pointing
+  // along scene north. And scaling the third eigen-axis by VEX is only right
+  // when that axis happens to be vertical, which is not something eigenvalue
+  // ordering guarantees.
+  //
+  // So push the covariance through the same mapping the positions use,
+  // C' = M C Mt, and decompose that. Orientation and vertical exaggeration
+  // both come out correct, and VEX no longer appears in the scale.
+  const M = [[1,0,0],[0,0,VEX],[0,-1,0]];
+  const {values, vectors} = eigen3(mul3(mul3(M, d.cov), tr3(M)));
+  const sx = Math.sqrt(Math.max(values[0],1)), sy = Math.sqrt(Math.max(values[1],1)),
+        sz = Math.sqrt(Math.max(values[2],1));
+  ell.position.copy(p);
+  // Jacobi can hand back a reflection (det = -1); setFromRotationMatrix
+  // silently produces a wrong quaternion for one. Flip a column to fix it.
+  const V = vectors.map(r=>r.slice());
+  if (det3(V) < 0) for (let i=0;i<3;i++) V[i][0] = -V[i][0];
+  ell.quaternion.setFromRotationMatrix(new THREE.Matrix4().set(
+    V[0][0], V[0][1], V[0][2], 0,
+    V[1][0], V[1][1], V[1][2], 0,
+    V[2][0], V[2][1], V[2][2], 0,
+    0,0,0,1));
+  ell.scale.set(sx, sy, sz);
+
+  if (d.truth){
+    const t = E(d.truth.enu);
+    truthMark.position.copy(t);
+  }
+
+  trailPts.push(p.clone());
+  while (trailPts.length > TRAIL) trailPts.shift();
+  trailGeo.setFromPoints(trailPts);
+
+  // Correlation-quality rays: one per node that actually contributed to this
+  // fix, drawn from its antenna to the solution. Nodes that heard the burst
+  // but were not selected draw nothing, so the picture shows the GDOP
+  // subset the supernode chose rather than everything that could hear.
+  //
+  // corr_quality is peak/rms of the correlation surface, and d.used is
+  // ordered to match it element for element. The reference node has no
+  // correlation against itself -- it is what the others were measured
+  // against -- so it gets its own colour rather than a quality-derived one.
+  rayGroup.clear();
+  const q = d.corr_quality || [], used = d.used || [];
+  for (const k in nodeObjs) $('fl-'+k)?.classList.remove('used','refn');
+
+  function ray(nid, colour, opacity){
+    const o = nodeObjs[nid]; if (!o) return;
+    const from = new THREE.Vector3(o.enu[0], o.enu[2]*VEX, -o.enu[1]);
+    rayGroup.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([from, p]),
+      new THREE.LineBasicMaterial({color:colour, transparent:true, opacity})));
+    $('fl-'+nid)?.classList.add('used');
+  }
+
+  used.forEach((nid, i) => {
+    // Below roughly 8 the correlation peak is close enough to the noise
+    // floor that the measurement is dragging the solve rather than helping
+    // it. Those go red instead of merely dim, because "which node is
+    // hurting me" is the question this view exists to answer.
+    const qv = q[i] || 0;
+    const t = Math.max(0, Math.min(1, (qv - 4) / 44));
+    // A real radio's ray is magenta like the rest of its markings, but only
+    // where orange would have been. Red still wins below 8: "which node is
+    // hurting me" is the question this view exists to answer, and losing
+    // that answer for the one node most likely to misbehave -- the hardware
+    // one -- would be the wrong trade.
+    const good = nodeObjs[nid]?.isHw ? C.hw : C.survey;
+    ray(nid, qv < 8 ? C.bad : good, 0.15 + 0.6 * t);
+  });
+  if (d.ref) {
+    ray(d.ref, nodeObjs[d.ref]?.isHw ? C.hw : C.hi, 0.9);
+    $('fl-'+d.ref)?.classList.add('refn');
+  }
+
+  // readouts
+  $('tid').textContent = d.tid;
+  $('lat').textContent = d.lat.toFixed(6)+'°';
+  $('lon').textContent = d.lon.toFixed(6)+'°';
+  $('alt').textContent = fmt(d.alt_m,1)+' m';
+  $('sh').textContent = fmt(d.sigma_h,1)+' m';
+  $('sv').textContent = fmt(d.sigma_v,1)+' m';
+  $('dop').textContent = fmt(d.hdop,2)+' / '+fmt(d.vdop,2);
+  $('res').textContent = fmt(d.resid_ns,1)+' ns';
+  $('nu').textContent = d.nodes_used+' of '+d.nodes_heard;
+  $('err').textContent = d.error
+    ? `${fmt(d.error.h_m,1)} h / ${fmt(d.error.v_m,1)} v` : '—';
+
+  if (stats){
+    $('mbps').textContent = fmt(stats.ingest_mbps,2)+' Mbps';
+    $('pulled').textContent = fmt(stats.mb_pulled,1)+' MB';
+    $('plat').textContent = fmt(stats.pull_ms,0)+' ms';
+    $('slat').textContent = fmt(stats.solve_ms,0)+' ms';
+    $('fb').textContent = stats.fixes+' / '+stats.bursts;
+    $('eh').textContent = stats.err_h_p50!=null?fmt(stats.err_h_p50,1)+' m':'—';
+    $('ev').textContent = stats.err_v_p50!=null?fmt(stats.err_v_p50,1)+' m':'—';
+    // server is the authority on these, so re-sync on every push -- keeps
+    // two open browsers agreeing and corrects a click that never landed
+    syncSolverButtons(stats);
+  }
+
+  if (health){
+    for (const k in health){
+      const h = health[k], li = $('fl-'+k); if(!li) continue;
+      const bar = li.querySelector('.bar i');
+      const snr = Math.min(h.detections>0?1:0.05, 1);
+      bar.style.right = (100 - snr*100)+'%';
+      li.querySelector('.val').textContent = h.detections;
+      li.classList.toggle('stale', !h.gps_lock);
+
+      // Mark real radios magenta. The node's own health says what it is --
+      // trusting the site config's `role` instead would colour a node by
+      // what it was meant to be rather than what actually came up, which is
+      // the distinction that matters while bringing hardware online.
+      // Latched: source is a property of the process, so recolouring on
+      // every health message would repaint 7 materials twice a second.
+      const o = nodeObjs[k];
+      if (o && !o.isHw && h.source && h.source !== 'sim'){
+        o.isHw = true;
+        o.mast.material.color.setHex(C.hw);
+        o.head.material.color.setHex(C.hw);
+        li.classList.add('hwnode');
+      }
+    }
+  }
+
+  const b = $('banner');
+  if (d.clock_correction === false){
+    b.style.display='block';
+    b.textContent='clock correction disabled — vertical solution unreliable';
+  } else if (d.sigma_v > 250){
+    b.style.display='block';
+    b.textContent='vertical poorly constrained — check node elevation spread';
+  } else b.style.display='none';
+}
+
+const es = new EventSource('/events');
+es.onmessage = e => {
+  try{ const m = JSON.parse(e.data);
+    if (m.type==='track') onTrack(m.data, m.health, m.stats);
+  }catch(err){ console.warn(err); }
+};
+
+// ---- controls ------------------------------------------------------------
+$('vex').addEventListener('input', e=>{
+  VEX = +e.target.value; $('vexlab').textContent='×'+VEX;
+  $('vexnote').textContent='Vertical ×'+VEX; layoutNodes();
+  // Buildings carry the same exaggeration as everything else with a height,
+  // so a 20 m block and a 95 m drone keep their true ratio at any setting.
+  if (bldGroup) bldGroup.scale.y = VEX; });
+$('trail').addEventListener('input', e=>{
+  TRAIL = +e.target.value; $('trlab').textContent=TRAIL; });
+const tog = (btn, obj) => btn.addEventListener('click', ()=>{
+  obj.visible = !obj.visible; btn.classList.toggle('on', obj.visible); });
+tog($('btnEll'), ell); tog($('btnTruth'), truthMark); tog($('btnRays'), rayGroup);
+
+// ---- OpenStreetMap layers (cosmetic) -------------------------------------
+// Two optional layers over the survey plane: raster tiles, and extruded
+// building footprints. Both are decoration -- nothing in the solve path
+// reads either, and neither is fetched until its button is pressed. The
+// rest of this page vendors three.js precisely so it runs with no network,
+// and that property survives: do not press these and nothing reaches out.
+//
+// The city selector moves the BASEMAP, not the fleet. Node positions are
+// ENU metres about the site origin, so switching city redraws the same
+// constellation over different streets -- which is a fair way to eyeball
+// what this geometry would look like sited elsewhere, and is not a claim
+// that the supernode has been reconfigured.
+const OSM_Z = 14;                 // ~1.7 km per tile at these latitudes
+const OSM_SPAN_M = 10000;         // basemap coverage, metres
+// Buildings cover less ground than the tiles, and that is a deliberate
+// compromise rather than an oversight. Overpass area cost grows as the
+// square: 10 km over Timisoara is 37k buildings / 26 MB / ~170 s to fetch
+// and roughly half a million triangles to draw. On a laptop also running
+// twelve simulation processes that starves the fleet -- measured, solve
+// time went from 110 ms to 4864 ms at load average 13 on 7 cores, and the
+// track visibly lagged the truth because the filter was correcting with
+// five-second-old fixes. 5 km keeps the whole constellation covered at
+// about a quarter of the cost. Raise it if the map matters more than the
+// simulation on your machine.
+const BLD_SPAN_M = 5000;
+const R_EARTH = 6378137;
+const OVERPASS = ['https://overpass-api.de/api/interpreter',
+                  'https://overpass.private.coffee/api/interpreter'];
+
+const lon2tile = (lon, z) => Math.floor((lon + 180) / 360 * 2 ** z);
+const lat2tile = (lat, z) => {
+  const r = lat * Math.PI / 180;
+  return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * 2 ** z);
+};
+const tile2lon = (x, z) => x / 2 ** z * 360 - 180;
+const tile2lat = (y, z) => {
+  const n = Math.PI - 2 * Math.PI * y / 2 ** z;
+  return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+};
+
+// Flat tangent-plane conversion. The solver uses a full ellipsoidal ENU
+// transform (geo.py); this approximation is good to centimetres over the
+// ~10 km drawn here and only ever places decoration.
+function llToEnu(lat, lon, lat0, lon0){
+  const k = Math.PI / 180;
+  return [(lon - lon0) * k * R_EARTH * Math.cos(lat0 * k),
+          (lat - lat0) * k * R_EARTH];
+}
+
+let mapGroup = null, bldGroup = null;
+// The buildings group is shown while it is still filling in, so a city
+// change must be able to remove it *immediately*. Waiting for the build
+// to notice it is stale means up to a chunk's worth of the previous
+// city's parcels keep landing on top of the new one.
+let inflight = null;
+let centre = null;                                  // {lat, lon} of the basemap
+
+function disposeGroup(g){
+  if (!g) return;
+  scene.remove(g);
+  g.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material){ if (o.material.map) o.material.map.dispose();
+                     o.material.dispose(); }
+  });
+}
+
+async function buildBasemap(lat, lon){
+  const half = OSM_SPAN_M / 2;
+  const dLat = half / (R_EARTH * Math.PI / 180);
+  const dLon = half / (R_EARTH * Math.PI / 180 * Math.cos(lat * Math.PI / 180));
+  const x0 = lon2tile(lon - dLon, OSM_Z), x1 = lon2tile(lon + dLon, OSM_Z);
+  const y0 = lat2tile(lat + dLat, OSM_Z), y1 = lat2tile(lat - dLat, OSM_Z);
+  const nx = x1 - x0 + 1, ny = y1 - y0 + 1;
+
+  // One canvas, one texture, one draw call -- not a mesh per tile.
+  const cv = document.createElement('canvas');
+  cv.width = nx * 256; cv.height = ny * 256;
+  const ctx = cv.getContext('2d');
+  let ok = 0;
+  await Promise.all(Array.from({length: nx * ny}, (_, i) => {
+    const ix = i % nx, iy = (i / nx) | 0;
+    return new Promise(res => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';   // OSM sends ACAO:*, so the canvas
+                                       // stays untainted and WebGL accepts it
+      img.onload = () => { ctx.drawImage(img, ix * 256, iy * 256); ok++; res(); };
+      img.onerror = () => res();
+      img.src = `https://tile.openstreetmap.org/${OSM_Z}/${x0 + ix}/${y0 + iy}.png`;
+    });
+  }));
+  if (!ok) throw new Error('no tiles');
+
+  const [wE, nN] = llToEnu(tile2lat(y0, OSM_Z), tile2lon(x0, OSM_Z), lat, lon);
+  const [eE, sN] = llToEnu(tile2lat(y1 + 1, OSM_Z), tile2lon(x1 + 1, OSM_Z), lat, lon);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(eE - wE, nN - sN),
+    // Tinted down: raw OSM is a light map on a dark console, and the tracks
+    // must stay the brightest thing on screen.
+    new THREE.MeshBasicMaterial({map: tex, color: 0x8fa3b8, transparent: true,
+                                 opacity: 0.9, depthWrite: false}));
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set((wE + eE) / 2, -2, -(sN + nN) / 2);
+  mesh.renderOrder = -1;
+  const g = new THREE.Group(); g.add(mesh); scene.add(g);
+  return g;
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// The public instances answer 504 when busy and 429 when you ask too fast.
+// Both are routine rather than exceptional -- measured over nine sequential
+// queries, four came back 429 with no pacing at all -- so back off and try
+// again rather than dropping the square.
+async function overpass(query, tries = 4){
+  let last;
+  for (let a = 0; a < tries; a++){
+    for (const ep of OVERPASS){
+      try {
+        const r = await fetch(ep, {method: 'POST', body: 'data=' + encodeURIComponent(query),
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'}});
+        if (r.ok) return await r.json();
+        last = new Error('HTTP ' + r.status);
+        if (r.status !== 429 && r.status !== 504) throw last;
+      } catch (e) { last = e; }
+    }
+    await sleep(2500 * (a + 1));
+  }
+  throw last || new Error('overpass unreachable');
+}
+
+// Shared by the live and cached paths: rings are [[E,N],...] in metres with
+// a height, already projected. Everything upstream of here differs; the
+// geometry must not.
+function meshFromRings(items){
+  const pos = [];
+  let n = 0, tagged = 0;
+  for (const it of items){
+    const ring = it._ring, h = it._h;
+    if (!ring || ring.length < 3) continue;
+    n++;
+    if (it._tagged) tagged++;
+    for (let i = 0; i < ring.length; i++){            // walls
+      const a = ring[i], b = ring[(i + 1) % ring.length];
+      pos.push(a[0], 0, -a[1],  b[0], 0, -b[1],  b[0], h, -b[1]);
+      pos.push(a[0], 0, -a[1],  b[0], h, -b[1],  a[0], h, -a[1]);
+    }
+    try {                                             // roof
+      const c2 = ring.map(p => new THREE.Vector2(p[0], p[1]));
+      for (const f of THREE.ShapeUtils.triangulateShape(c2, [])){
+        for (const idx of f){ const p = ring[idx]; pos.push(p[0], h, -p[1]); }
+      }
+    } catch (e) { /* degenerate footprint: keep the walls, skip the roof */ }
+  }
+  if (!n) return null;
+  const bg = new THREE.BufferGeometry();
+  bg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  bg.computeVertexNormals();
+  // Midway between a first attempt that sank into the background and a
+  // second that competed with the track. Buildings should read as a city
+  // without ever being the brightest thing on screen.
+  const mesh = new THREE.Mesh(bg, new THREE.MeshLambertMaterial({
+    color: 0x6e8094, emissive: 0x111820, transparent: true, opacity: 0.95}));
+  mesh.userData.count = n; mesh.userData.tagged = tagged;
+  return mesh;
+}
+
+// Live Overpass elements -> rings, then the shared builder above.
+function meshFromElements(elements, lat, lon){
+  const items = [];
+  for (const w of elements){
+    const geom = w.geometry;
+    if (!geom || geom.length < 4) continue;
+    const t = w.tags || {};
+    // Only a small fraction of OSM buildings carry height or levels -- 1% to
+    // 6% depending on the area -- so most of this skyline is the 9 m default.
+    // It is a plausible city, not a survey, and nothing measures against it.
+    let h = parseFloat(t.height);          // parseFloat copes with "12 m"
+    let tag = isFinite(h);
+    if (!tag) {
+      const lv = parseFloat(t['building:levels']);
+      h = isFinite(lv) ? lv * 3.2 : 9.0;
+    }
+    // OSM contains height=0 and absurd outliers; both would render as
+    // degenerate or spiked geometry, so clamp rather than trust the tag.
+    h = Math.max(3, Math.min(h, 300));
+    const ring = geom.slice(0, -1).map(p => llToEnu(p.lat, p.lon, lat, lon));
+    items.push({_ring: ring, _h: h, _tagged: tag});
+  }
+  return meshFromRings(items);
+}
+
+// Fetched in a grid of smaller queries rather than one big one, and each
+// chunk is added the moment it lands. One 10 km query is ~26 MB and 40-70 s
+// on the public API, during which the console shows nothing and reasonably
+// looks broken -- and a single timeout loses the lot. Nine ~3.3 km queries
+// each return in a few seconds, the map fills in visibly, and a chunk that
+// fails costs only its own square. Ordered centre-out so the ground under
+// the fleet is drawn first.
+// Pre-baked footprints, if someone has run tools/fetch_buildings.py for
+// this centre. Served from the console's own directory, so it costs no
+// network, no Overpass quota and no 26 MB of OSM JSON to parse -- and it
+// restores the offline-first property that the live path gives up.
+function cacheName(lat, lon, span){
+  return `cache/b_${lat.toFixed(4)}_${lon.toFixed(4)}_${span}.json`;
+}
+
+async function buildingsFromCache(lat, lon, onProgress, stale){
+  const r = await fetch(cacheName(lat, lon, BLD_SPAN_M));
+  if (!r.ok) throw new Error('no cache');
+  const packed = await r.json();
+  // Packed as [height, x0,y0, x1,y1, ...] per building, in ENU metres about
+  // the centre it was baked for -- so nothing here re-projects.
+  const elements = packed.b.map(a => ({
+    _h: a[0],
+    _ring: Array.from({length: (a.length - 1) / 2}, (_, i) => [a[1 + 2*i], a[2 + 2*i]])
+  }));
+  const g = new THREE.Group();
+  g.scale.y = VEX; g.userData.vexScaled = true;
+  const mesh = meshFromRings(elements);
+  if (!mesh) throw new Error('empty cache');
+  g.add(mesh); scene.add(g);
+  g.userData.info = `${mesh.userData.count} buildings from local cache`;
+  if (onProgress) onProgress(1, 1, mesh.userData.count, 0);
+  return g;
+}
+
+async function buildBuildings(lat, lon, onProgress, stale){
+  try { return await buildingsFromCache(lat, lon, onProgress, stale); }
+  catch (e) { /* nothing baked for this centre: fall through to live */ }
+  const N = 3;
+  const half = BLD_SPAN_M / 2;
+  const dLat = half / (R_EARTH * Math.PI / 180);
+  const dLon = half / (R_EARTH * Math.PI / 180 * Math.cos(lat * Math.PI / 180));
+
+  const chunks = [];
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++){
+    const s = lat - dLat + 2 * dLat * i / N, n2 = lat - dLat + 2 * dLat * (i + 1) / N;
+    const w = lon - dLon + 2 * dLon * j / N, e = lon - dLon + 2 * dLon * (j + 1) / N;
+    chunks.push({s, n2, w, e,
+                 d: Math.hypot(i - (N - 1) / 2, j - (N - 1) / 2)});
+  }
+  chunks.sort((a, b) => a.d - b.d);
+
+  const g = new THREE.Group();
+  g.scale.y = VEX;                 // same vertical exaggeration as everything
+  g.userData.vexScaled = true;     // else a 20 m block and a 95 m drone lie
+  scene.add(g);
+  inflight = g;
+
+  let total = 0, tagged = 0, failed = 0;
+
+  // Sequential, deliberately. Two concurrent workers were tried on the
+  // theory that Overpass gives an IP two slots, and measured SLOWER --
+  // 201 s against 171 s -- because the pair tripped the rate limiter into
+  // 12 retries instead of 3, and each retry backs off. Concurrency against
+  // a rate-limited service buys nothing but retries.
+  for (let c = 0; c < chunks.length; c++){
+    const k = chunks[c];
+    const bbox = [k.s, k.w, k.n2, k.e].map(v => v.toFixed(5)).join(',');
+    try {
+      const data = await overpass(
+        `[out:json][timeout:60];way["building"](${bbox});out geom;`);
+      if (stale && stale()){ if (inflight === g) inflight = null;
+                             scene.remove(g); return null; }
+      const mesh = meshFromElements(data.elements, lat, lon);
+      if (mesh){ g.add(mesh); total += mesh.userData.count;
+                 tagged += mesh.userData.tagged; }
+    } catch (e) { failed++; }
+    if (onProgress) onProgress(c + 1, chunks.length, total, failed);
+    // Abandon a superseded city mid-fetch: no point spending another
+    // minute and eight Overpass queries on a map nobody will see.
+    if (stale && stale()){ if (inflight === g) inflight = null;
+                           scene.remove(g); return null; }
+    if (c < chunks.length - 1) await sleep(1200);
+  }
+  if (inflight === g) inflight = null;
+  if (!total){ scene.remove(g); throw new Error('no buildings returned'); }
+  g.userData.info = `${total} buildings, ${tagged} with surveyed height`
+    + (failed ? ` (${failed}/${chunks.length} areas failed)` : '');
+  return g;
+}
+
+function flash(msg, ms){
+  const b = $('banner');
+  b.style.display = 'block'; b.textContent = msg;
+  setTimeout(() => { b.style.display = 'none'; }, ms || 6000);
+}
+
+function mapChrome(){
+  const on = !!(mapGroup && mapGroup.visible) || !!(bldGroup && bldGroup.visible);
+  $('osmcredit').style.display = on ? '' : 'none';
+  grid.material.opacity = on ? 0.25 : 0.9;
+}
+
+// Every build is stamped with the generation current when it started. A city
+// change bumps the generation, so anything still in flight for the previous
+// city is discarded on arrival instead of being installed over the new one.
+let gen = 0;
+
+// Builds are serialised through this chain rather than guarded by a flag.
+// The flag version silently DROPPED work: switching city started a rebuild
+// and then awaited a 30 s building fetch, so a second switch during that
+// window hit the guard and returned, leaving the map simply absent with no
+// error shown. Queueing is the difference between slow and broken.
+let chain = Promise.resolve();
+const serialise = fn => (chain = chain.then(fn, fn));
+
+// A build is stamped with the generation current when it is QUEUED, not
+// when it runs -- that distinction is the whole bug. Stamping at run time
+// meant three quick city switches queued six builds that all executed after
+// `gen` had settled, so none looked stale, and every one of them installed:
+// each build calls scene.add() itself while the setter only reassigns a
+// variable, so the superseded groups stayed in the scene forever. That is
+// what left old buildings floating over a new city.
+function queueBuild(btn, get, set, build, label){
+  const myGen = gen;
+  const stale = () => myGen !== gen;
+  return serialise(async () => {
+    if (stale()) return;                  // superseded before our turn came
+    const txt = btn.dataset.label || btn.textContent;
+    btn.dataset.label = txt;
+    btn.textContent = '…';
+    const progress = label !== 'buildings' ? null : (done, all, count) => {
+      if (stale()) return;
+      btn.textContent = `${done}/${all}`;
+      flash(`buildings ${done}/${all} areas — ${count} so far`, 90000);
+    };
+    try {
+      const g = await build(centre.lat, centre.lon, progress, stale);
+      if (stale() || !g){ disposeGroup(g); return; }
+      disposeGroup(get());                // never stack a second copy
+      set(g);
+      btn.classList.add('on'); mapChrome();
+      if (g.userData.info) flash(g.userData.info, 4000);
+    } catch (err) {
+      if (stale()) return;
+      flash(`${label} unavailable (${err.message}) — console is offline-first, everything else still works`);
+      btn.classList.remove('on');
+    } finally { btn.textContent = txt; }
+  });
+}
+
+async function layer(btn, get, set, build, label){
+  if (get()){                                   // built already: just toggle
+    get().visible = !get().visible;
+    btn.classList.toggle('on', get().visible);
+    mapChrome(); return;
+  }
+  return queueBuild(btn, get, set, build, label);
+}
+
+
+$('btnMap').addEventListener('click', () => layer($('btnMap'),
+  () => mapGroup, g => mapGroup = g, buildBasemap, 'map tiles'));
+$('btn3D').addEventListener('click', () => layer($('btn3D'),
+  () => bldGroup, g => bldGroup = g, buildBuildings, 'buildings'));
+
+// City centres, for the basemap only. The first entry is filled in from the
+// server's own site origin so the default view always matches the deployed
+// configuration rather than a hardcoded guess.
+const CITIES = [
+  ['Arad',         46.1866, 21.3123],
+  ['București',    44.4268, 26.1025],
+  ['Cluj-Napoca',  46.7712, 23.6236],
+  ['Craiova',      44.3302, 23.7949],
+  ['Galați',       45.4353, 28.0080],
+  ['Iași',         47.1585, 27.6014],
+  ['Oradea',       47.0465, 21.9189],
+  ['Timișoara',    45.7489, 21.2087],
+];
+
+(async () => {
+  const cfg = await (await fetch('/config')).json();
+  centre = {lat: cfg.origin.lat, lon: cfg.origin.lon};
+  const sel = $('citysel');
+  const o = document.createElement('option');
+  o.value = `${centre.lat},${centre.lon}`;
+  o.textContent = 'Site origin';
+  sel.appendChild(o);
+  for (const [name, lat, lon] of CITIES){
+    const opt = document.createElement('option');
+    opt.value = `${lat},${lon}`; opt.textContent = name;
+    sel.appendChild(opt);
+  }
+})();
+
+$('citysel').addEventListener('change', e => {
+  const [lat, lon] = e.target.value.split(',').map(Number);
+  centre = {lat, lon};
+  gen++;                                   // invalidate anything in flight
+  const wantMap = $('btnMap').classList.contains('on');
+  const wantBld = $('btn3D').classList.contains('on');
+  disposeGroup(mapGroup); disposeGroup(bldGroup);
+  disposeGroup(inflight);                  // half-built previous city, gone now
+  mapGroup = bldGroup = inflight = null;
+  $('btnMap').classList.remove('on'); $('btn3D').classList.remove('on');
+  mapChrome();
+  // Queued, not fired-and-forgotten: each rebuild waits its turn rather than
+  // being dropped because another is running. Intent is read from the BUTTON
+  // state, not from whether a group object happens to exist -- a failed
+  // rebuild used to null the group and thereby silently opt the layer out of
+  // every later city change.
+  if (wantMap) queueBuild($('btnMap'), () => mapGroup, g => mapGroup = g,
+                          buildBasemap, 'map tiles');
+  if (wantBld) queueBuild($('btn3D'), () => bldGroup, g => bldGroup = g,
+                          buildBuildings, 'buildings');
+});
+
+// These two are not view toggles -- they change how the supernode solves, so
+// they round-trip to the server and the button state is driven by the reply
+// (and by every stats push after it), never by the click. Otherwise a failed
+// request leaves the console confidently showing a setting that is not on.
+function solverToggle(btn, key){
+  btn.addEventListener('click', async () => {
+    const want = !btn.classList.contains('on');
+    try {
+      const r = await fetch(`/control?${key}=${want ? 1 : 0}`);
+      syncSolverButtons(await r.json());
+    } catch (e) { /* leave the button where it was; next push corrects it */ }
+  });
+}
+// Clock discipline is a three-way choice, not three toggles: exactly one
+// regime is in force. Clicking one selects it; the server's reply decides
+// which lights up.
+const CLOCK_BTN = {btnClkGps:'gpsdo', btnClkHold:'holdover', btnClkFree:'free'};
+function clockSelect(id, mode){
+  $(id).addEventListener('click', async () => {
+    try { syncSolverButtons(await (await fetch('/control?clock='+mode)).json()); }
+    catch (e) { /* next stats push will correct the display */ }
+  });
+}
+for (const [id, mode] of Object.entries(CLOCK_BTN)) clockSelect(id, mode);
+
+function syncSolverButtons(s){
+  if (!s) return;
+  if ('quality_gate' in s) $('btnGate').classList.toggle('on', !!s.quality_gate);
+  if ('robust' in s) $('btnRobust').classList.toggle('on', !!s.robust);
+  if ('caf' in s) $('btnCaf').classList.toggle('on', !!s.caf);
+  if ('gcc' in s) $('btnGcc').classList.toggle('on', s.gcc === 'ht' || s.gcc === true);
+  if ('clock_mode' in s)
+    for (const [id, mode] of Object.entries(CLOCK_BTN))
+      $(id).classList.toggle('on', s.clock_mode === mode);
+}
+solverToggle($('btnGate'), 'gate');
+solverToggle($('btnRobust'), 'robust');
+solverToggle($('btnCaf'), 'caf');
+solverToggle($('btnGcc'), 'gcc');
+fetch('/control').then(r=>r.json()).then(syncSolverButtons).catch(()=>{});
+
+addEventListener('resize', ()=>{
+  cam.aspect = innerWidth/innerHeight; cam.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight); });
+
+(function loop(){
+  requestAnimationFrame(loop);
+  controls.update();
+  // stale-link indication: the target dims if telemetry stops, so a frozen
+  // display is never mistaken for a stationary drone
+  const age = (performance.now()-lastMsg)/1000;
+  target.material.opacity = age>4 ? 0.25 : 1;
+  target.material.transparent = age>4;
+  renderer.render(scene, cam);
+})();
+
+buildNodes();
+</script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Solver accuracy (no transport)
+        run: python validate_math.py
+      - name: "Moving emitter: carrier model + CAF recovery"
+        run: python validate_caf.py
+      - name: "OFDM emitter: CP detection margin + GCC-HT"
+        run: python validate_ofdm.py
+      - name: "Frequency hopping: narrowband loss + wideband recovery"
+        run: python validate_hopping.py
+      - name: "Multipath: systematic bias, and bandwidth as the defence"
+        run: python validate_multipath.py
+      - name: UHD timing convention + node wiring (fake device)
+        run: python validate_uhd_timing.py
