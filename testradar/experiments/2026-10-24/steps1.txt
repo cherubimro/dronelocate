@@ -1,0 +1,17 @@
+# operator controls usable in bird mode, each followed by its restore
+gain 50 setup.gain=50
+gain auto
+gain 0 setup.gain=0
+sidelobe 50 setup_extended.sidelobe=50
+sidelobe auto setup_extended.sidelobe=auto
+sidelobe 75 setup_extended.sidelobe=75
+doppler both setup_extended.doppler=both
+doppler approaching setup_extended.doppler=approaching
+doppler-speed 3 setup_extended.doppler_speed_m_s=3.0
+doppler-speed 2 setup_extended.doppler_speed_m_s=2.0
+interference 1 setup.interference_rejection=1
+interference 0 setup.interference_rejection=0
+target-boost 1 setup.target_boost=1
+target-boost 0 setup.target_boost=0
+accent-light 1 config.accent_light=1
+accent-light 0 config.accent_light=0

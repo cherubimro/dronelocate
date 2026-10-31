@@ -1,0 +1,367 @@
+================================================================================
+dronelocate on a Debian server, with sensor nodes on Raspberry Pis
+================================================================================
+
+Target layout:
+
+    Debian server        supernode: correlator, tracker, Zenoh hub, web consoles
+      |
+      |  Zenoh over TCP 7447        HTTP 8080 (3D console)
+      |  <-------------------->     HTTP 8081 (spectrum dashboard)
+      |                                    ^
+    Raspberry Pi x N                       |
+      node.py, one per Pi              your laptop's browser
+
+
+FIRST, A CORRECTION WORTH MAKING
+--------------------------------------------------------------------------------
+There is NO separate Zenoh server or broker to install. The supernode IS the
+Zenoh hub: zconf.hub() opens a Zenoh session in "peer" mode listening on
+tcp/0.0.0.0:7447, and every node connects to it as a Zenoh "client". Nothing
+else needs installing, and there is no zenohd to manage.
+
+So: one process on the Debian box (supernode.py) and one process per Pi
+(node.py). That is the whole system.
+
+
+PORTS
+--------------------------------------------------------------------------------
+    7447/tcp    Zenoh          Pis -> server        REQUIRED
+    8080/tcp    3D console     laptop -> server     open to your LAN only
+    8081/tcp    spectrum       laptop -> server     open to your LAN only
+
+Nothing listens on the Pis. They dial out to the server, which means the Pis
+can sit behind NAT or a cellular link with no inbound rules at all.
+
+SECURITY, READ BEFORE OPENING ANY OF THIS TO A NETWORK
+    The consoles have NO authentication. Anyone who can reach 8080 can flip
+    solver switches and retune the fleet via /control. The Zenoh bus has no
+    authorisation either: mTLS (zconf --tls-ca/--tls-cert/--tls-key) proves
+    WHO a peer is, but nothing restricts what it may publish, so any peer
+    holding a valid certificate can publish on another node's keys.
+    Put this on a private VLAN, or bind the consoles to localhost and reach
+    them over an SSH tunnel:
+        ssh -N -L 8080:localhost:8080 -L 8081:localhost:8081 user@server
+
+
+================================================================================
+PART 1 -- THE DEBIAN SERVER
+================================================================================
+
+1.1  Packages
+--------------------------------------------------------------------------------
+Debian 12 (bookworm) ships Python 3.11, which is what this project targets.
+
+    sudo apt update
+    sudo apt install -y python3 python3-pip python3-venv git
+
+1.2  A user and a directory
+--------------------------------------------------------------------------------
+    sudo useradd -r -m -d /opt/dronelocate -s /usr/sbin/nologin dronelocate
+    sudo mkdir -p /opt/dronelocate
+    sudo chown dronelocate:dronelocate /opt/dronelocate
+
+Then put the code there -- either from the tarball:
+
+    sudo -u dronelocate tar xzf dronedemov7.tar.gz -C /tmp
+    sudo -u dronelocate cp -a /tmp/dronelocate/. /opt/dronelocate/
+
+or from git:
+
+    sudo -u dronelocate git clone <repo-url> /opt/dronelocate
+
+1.3  Dependencies
+--------------------------------------------------------------------------------
+Debian 12+ marks the system Python "externally managed" (PEP 668), so plain
+pip refuses. Two options; the venv is tidier:
+
+    # option A: virtualenv (recommended)
+    sudo -u dronelocate python3 -m venv /opt/dronelocate/.venv
+    sudo -u dronelocate /opt/dronelocate/.venv/bin/pip install \
+        -r /opt/dronelocate/requirements.txt
+
+    # option B: system python
+    sudo pip install --break-system-packages -r /opt/dronelocate/requirements.txt
+
+NOTE: if this server will ever drive a USRP itself, create the venv with
+      --system-site-packages, because apt's python3-uhd is invisible inside a
+      plain one. For a supernode-only box it does not matter.
+
+Verify:
+
+    sudo -u dronelocate /opt/dronelocate/.venv/bin/python \
+        -c "import zenoh, cbor2, numpy, scipy; print('deps ok')"
+
+1.4  The site config -- the part that decides your accuracy
+--------------------------------------------------------------------------------
+Copy config/site.json to something of your own, e.g. config/site-live.json,
+and edit:
+
+    "origin"  : lat/lon/alt of your local ENU frame origin
+    "nodes"   : one entry per Pi -- "id" and "enu" [East, North, Up] in METRES
+                relative to that origin
+    "radio"   : fc_hz, fs_sps, bw_hz for the band you are watching
+    "solver"  : min_nodes / max_nodes
+
+SURVEY THE NODE POSITIONS PROPERLY. Node position error propagates 1:1 into
+every fix: a node whose recorded position is 3 m wrong makes every target fix
+about 3 m wrong, and it does so while correlating perfectly and reporting a
+healthy chi-square. A single handheld GNSS fix is 3-5 m. Use RTK (ROMPOS
+provides NTRIP corrections in Romania) or a 24-hour static survey-in.
+
+This same file must be BYTE-IDENTICAL on the server and on every Pi. Two hosts
+that disagree about where a node is produce a confidently wrong answer, which
+is the hardest failure mode in this system to notice. deploy.sh ships the
+config with the code for exactly this reason.
+
+1.5  Run it by hand once, before making it a service
+--------------------------------------------------------------------------------
+    cd /opt/dronelocate
+    sudo -u dronelocate .venv/bin/python supernode.py \
+        --config config/site-live.json --bind 0.0.0.0
+
+Expected output:
+
+    [super] console on http://localhost:8080
+    [super] spectrum dashboard on http://localhost:8081
+    [super] clock correction ON | GPU no
+    [super] bursts 0 fixes 0 | ...
+
+Zero bursts is correct: no nodes are running yet. Ctrl-C when satisfied.
+
+1.6  systemd
+--------------------------------------------------------------------------------
+Environment file -- /etc/default/dronelocate-supernode:
+
+    PYTHON=/opt/dronelocate/.venv/bin/python
+    CONFIG=config/site-live.json
+    BIND=0.0.0.0
+    ZPORT=7447
+    HTTP_PORT=8080
+    SPEC_PORT=8081
+    EXTRA=
+
+Then install the unit, substituting the three placeholders:
+
+    cd /opt/dronelocate
+    sed -e 's|@@DIR@@|/opt/dronelocate|g' \
+        -e 's|@@USER@@|dronelocate|g' \
+        -e 's|@@ENVDIR@@|/etc/default|g' \
+        deploy/dronelocate-supernode.service \
+      | sudo tee /etc/systemd/system/dronelocate-supernode.service >/dev/null
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now dronelocate-supernode
+    systemctl status dronelocate-supernode
+    journalctl -u dronelocate-supernode -f
+
+1.7  Firewall
+--------------------------------------------------------------------------------
+With ufw, replacing the subnets with yours:
+
+    sudo ufw allow from 192.0.2.0/24 to any port 7447 proto tcp   # the Pis
+    sudo ufw allow from 192.0.2.0/24 to any port 8080 proto tcp   # your laptop
+    sudo ufw allow from 192.0.2.0/24 to any port 8081 proto tcp
+    sudo ufw enable
+
+Do not expose 8080/8081 to the internet. See the security note above.
+
+
+================================================================================
+PART 2 -- YOUR LAPTOP (BROWSER ONLY)
+================================================================================
+
+Nothing to install. Open:
+
+    http://<server-ip>:8080     3D console: track, truth, covariance, controls
+    http://<server-ip>:8081     spectrum: per-node waterfall + periodogram
+
+Both are static pages served by the supernode and fed by Server-Sent Events.
+They are meant for two monitors side by side.
+
+If you bound the consoles to localhost for safety, tunnel instead:
+
+    ssh -N -L 8080:localhost:8080 -L 8081:localhost:8081 user@server
+    # then browse http://localhost:8080
+
+ONE THING WORTH KNOWING: the 3D console only updates when a TRACK is
+published. Below solver.min_nodes (5 by default) there are no fixes, so the
+page will sit there looking broken while the bus is perfectly healthy. If you
+are bringing up one or two Pis, watch 8081 instead -- the spectrum dashboard
+updates from every node independently of whether anything solves.
+
+
+================================================================================
+PART 3 -- THE RASPBERRY PI NODES
+================================================================================
+
+3.1  On each Pi, once
+--------------------------------------------------------------------------------
+Raspberry Pi OS (64-bit, bookworm) is Debian, so this matches Part 1:
+
+    sudo apt update
+    sudo apt install -y python3 python3-pip python3-venv
+    # for a real radio as well:
+    sudo apt install -y uhd-host python3-uhd     # USRP / B210
+    sudo uhd_images_downloader                   # B210 firmware + FPGA
+    sudo usermod -aG usrp "$USER"                # then log out and back in
+
+Dependencies, same PEP 668 caveat as the server. If the Pi drives a USRP the
+venv MUST be created with --system-site-packages, or apt's python3-uhd is
+invisible inside it and node.py --source uhd fails with "No 'uhd' module"
+while sim mode keeps working:
+
+    python3 -m venv --system-site-packages ~/dronelocate-venv
+    ~/dronelocate-venv/bin/pip install -r requirements.txt
+
+Check all four at once:
+
+    ~/dronelocate-venv/bin/python -c \
+        "import zenoh, cbor2, numpy, uhd; print('all four ok')"
+
+3.2  Deploy from your workstation
+--------------------------------------------------------------------------------
+deploy.sh ships the tree, writes the environment files, installs the node
+systemd unit and starts it -- one Pi per node id:
+
+    ./deploy.sh --hub 192.0.2.10 \
+                --config config/site-live.json \
+                --python /home/pi/dronelocate-venv/bin/python \
+                pi-a:n01 pi-b:n02 pi-c:n03 pi-d:n04 pi-e:n05
+
+Each argument is host:node[:source], where source is sim (default), uhd or
+rtlsdr. So a mixed fleet is:
+
+    ./deploy.sh --hub 192.0.2.10 pi-a:n01 pi-b:n02:uhd
+
+Check it first without touching anything:
+
+    ./deploy.sh --hub 192.0.2.10 --dry-run pi-a:n01
+
+Then:
+
+    ./deploy.sh --status pi-a:n01 pi-b:n02
+    ./deploy.sh --logs   pi-a:n01
+    ./deploy.sh --stop   pi-a:n01
+
+It needs passwordless ssh to each Pi and sudo there. It refuses a node id that
+is not in the config before it touches the remote host.
+
+NOT YET TESTED AGAINST REAL PIS. The script's argument handling and the unit
+file have been verified, but the ssh/sudo/tar path has never actually run.
+Use --dry-run first and expect to fix something.
+
+3.3  Or by hand, on one Pi
+--------------------------------------------------------------------------------
+    cd ~/dronelocate
+    ~/dronelocate-venv/bin/python node.py \
+        --config config/site-live.json --node n01 \
+        --source sim --hub 192.0.2.10
+
+Expected:
+
+    [n01] sim @ 2.40 Msps ci8 | snippet 24000 samp = 47 KB | ...
+
+3.4  The emitter -- simulation only
+--------------------------------------------------------------------------------
+scene.py publishes ground truth so emulated nodes know what to render. It is
+SIM ONLY. Run exactly one instance, anywhere that can reach the hub:
+
+    python3 scene.py --config config/site-live.json --hub 192.0.2.10
+
+With real radios there is no scene.py -- the drone is the emitter.
+
+RUN EXACTLY ONE. Two scene.py instances publish rival truth streams with
+independent burst counters, and the result reads as the tracker randomly
+losing the target while every log line looks healthy. The only tell is a burst
+rate several times what the config asks for.
+
+
+================================================================================
+PART 4 -- BRINGING IT UP
+================================================================================
+
+In order, checking each before the next:
+
+  1. Supernode alone.        journalctl shows the two console lines and
+                             "bursts 0 fixes 0" every 5 s.
+  2. Consoles reachable.     Browse 8080 and 8081 from the laptop. 8080 will
+                             look static -- correct, there are no fixes yet.
+  3. ONE node.               Its panel appears on 8081 within a few seconds.
+                             Still no fixes: min_nodes is 5.
+  4. All nodes.              8081 shows one panel per Pi. On the server,
+                             "bursts N fixes N".
+  5. Emitter.                Real drone, or scene.py for a sim.
+  6. 8080 comes alive.       Track, covariance ellipsoid, rays to the nodes
+                             that contributed.
+
+Health check any time:
+
+    curl -s http://<server>:8080/config | head -c 300
+    journalctl -u dronelocate-supernode -n 20 --no-pager
+    ./deploy.sh --status pi-a:n01 pi-b:n02 ...
+
+
+================================================================================
+PART 5 -- THINGS THAT WILL WASTE YOUR AFTERNOON
+================================================================================
+
+"The console is frozen / nothing moves"
+    Probably correct behaviour. The 3D console only redraws on a published
+    track, and there are no tracks below solver.min_nodes. Check 8081, which
+    updates per node regardless, and check "bursts N fixes M" on the server.
+
+"apt says python3-uhd is already the newest version, but uhd will not import"
+    A virtualenv is hiding it. apt installs to the SYSTEM python's
+    dist-packages, which a plain venv excludes. Recreate it with
+    --system-site-packages, or use /usr/bin/python3 directly.
+
+"The tracker keeps losing the target at random"
+    Look for two fleets. A failed start leaves nodes and scene.py alive, and
+    starting again quietly adds a second scene.py publishing rival truth. The
+    tell is the burst rate, not any error message. run_demo.sh refuses to
+    stack fleets; deploy.sh does not check this for you.
+
+"Logs are empty for minutes"
+    Python block-buffers stdout when it is not a terminal. Both systemd units
+    set PYTHONUNBUFFERED=1; if you run something by hand with output
+    redirected, set it yourself.
+
+"Fixes are confidently wrong by metres"
+    Suspect the survey before the software. Node position error goes 1:1 into
+    every fix and produces a healthy-looking chi-square while doing it. Verify
+    every node's enu, and verify the config is identical on all hosts.
+
+"Vertical error is much worse than horizontal"
+    Expected, and not a bug. Ground-level nodes constrain altitude far worse
+    than horizontal position. Elevating one or two nodes helps; a node
+    directly OVERHEAD helps most -- measured on the demo geometry, one
+    overhead node improves VDOP by about a third, while the same node moved
+    200 m sideways gives almost nothing.
+
+"Timing looks bad and no software change helps"
+    Measure the clock. Run hw_selftest.py against one board first: schedule
+    jitter below 50 ns is viable, above 200 ns means the PPS path is unusable
+    for TDOA and that hardware can only do bearing-based DF. Clock jitter
+    dominates the error budget -- on the current settings it is roughly five
+    times the correlation error, so widening bandwidth buys almost nothing
+    until the clock is fixed.
+
+
+================================================================================
+REFERENCE
+================================================================================
+
+    supernode.py  --config --bind --port --http-port --spec-port
+                  --no-clock-correction --tls-ca --tls-cert --tls-key
+    node.py       --config --node --source {sim,rtlsdr,uhd} --hub --port
+                  --seed --device --capture-mode {scheduled,independent}
+    scene.py      --config --hub --port --kind {orbit,transit} --rate
+    deploy.sh     --hub --port --config --dir --user --python
+                  --status --stop --logs --dry-run
+
+Further reading in the repo:
+    README.md                     profiles, consoles, Ubuntu/Windows notes
+    docs/splitter_calibration.md  dual-channel bearing calibration
+    docs/uhd-py311-build.md       building UHD bindings (openSUSE only)
+    TODO.md                       roadmap, including airborne nodes and RTK

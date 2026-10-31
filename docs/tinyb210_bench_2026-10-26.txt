@@ -1,0 +1,304 @@
+TinyB210 BENCH REPORT -- 2026-10-26
+Part 1: four-board timing test (4 x TinyB210, each on its own GPS antenna)
+2026-10-26, afternoon, second site
+=====================================================================
+
+BOARDS (labels written on them)
+  1  1970XX   chipset controller, USB-C
+  2  1974XX   chipset controller, USB-A
+  3  1972XX   Thunderbolt controller, USB-A
+  4  1971XX   Thunderbolt controller, USB-C
+  All on USB 3 (5000 Mbps). Laptop on battery.
+
+SETUP
+  - All four power-cycled (replugged) first; 1970XX's GPS module had
+    stopped answering ("GPS invalid reply") until then.
+  - Signal: phone hotspot ESP32-Dioda, Wi-Fi channel 11 (2462 MHz), kept
+    busy with pings. Nothing moved during the run.
+  - Each board receives on RX2 A (its antenna port). 300 captures of 2 ms
+    at 20 Msps, all four at the same UTC instants, 2 per second, 40 dB.
+  - All 6 pairs come from the SAME captures.
+  - Command:
+      tools/two_board_timing.py --boards 1970XX,1974XX,1972XX,1971XX \
+          --fc 2.462e9 --gain 40 --captures 300 --snippet-ms 2
+
+GPS DISCIPLINE (watch, 2.5 min, all four together)
+                 30 s        60 s      90 s     120 s
+  1 1970XX     -724 ns/s   -218      -10       -1
+  2 1974XX     -495        -190       -9       -1
+  3 1972XX     -872        -241      -11        0
+  4 1971XX     -772        -201       -8        0
+  -> all four start ~15 ppm off and pull in within ~2 minutes.
+  Alignment: all four host offsets -39.7 ms (same second, same ms).
+
+RESULT -- settled part (t >= 40 s; board 4's PHASE was still settling in
+the first ~30 s even though its frequency already had)
+  pair              n   median    std    MAD   MAD within 30 s   (ns)
+  1>2  056>414     98    -15.7   28.7   35.2      24.9
+  1>3  056>243    101    -44.9   32.9   18.1       9.3
+  1>4  056>151     99    +59.4   12.4    9.3       9.0
+  2>3  414>243     98    -33.0   18.4   17.7      15.2
+  2>4  414>151     98    +79.4   15.9   13.5       4.3
+  3>4  243>151     94   +103.3   17.6   10.9       9.1
+
+  PER-BOARD OFFSET relative to board 1 (1970XX):
+    1 1970XX      0.0 ns
+    2 1974XX    -15.8 ns
+    3 1972XX    -45.6 ns
+    4 1971XX    +60.2 ns
+  LOOP CLOSURE (should be ~0):  -3.8, +4.3, -1.0, -9.1 ns  -> consistent.
+
+  Whole run including the first 30 s: std 18-31 ns per pair, tool verdict
+  "VIABLE: every pair agrees to < 50 ns".
+
+WHAT IT MEANS
+  1. TDOA IS VIABLE on these four boards: every pair agrees to 12-33 ns
+     (std), 9-35 ns (MAD), and 4-25 ns within any 30 s. That is 4-10 m of
+     range per pair, before geometry.
+  2. Board 2 (1974XX) is the noisiest: its pairs are 16-29 ns std against
+     12-18 ns for the others (the 1>3 pair's 33 ns std is a few outlier
+     captures; its MAD is 18). 1974XX is also the board whose oscillator
+     got stuck at -15 ppm earlier today. Worth watching; not disqualifying.
+  3. The boards have CONSTANT offsets between them, -46 to +60 ns (~32 m
+     of range if left uncalibrated). The loops close to <= 9 ns, so these
+     numbers are real and self-consistent.
+  4. IMPORTANT: THE OFFSETS DO NOT SURVIVE A POWER-CYCLE. Before the
+     replug, the same pair 1>2 measured +218 ns (two-board run); after it,
+     -20 ns, nothing moved. So a one-time calibration per board is NOT
+     enough: the offsets must be measured again after every power-up --
+     at the field site that means a reference transmitter at a surveyed
+     point, measured at the start of each session (or continuously).
+  5. Give every board >= 3 minutes after power-up before measuring: the
+     frequency pulls in within ~2 min, but board 4's phase took ~30 s
+     longer.
+  6. Captures 60-100, 180-220 and 280 had no usable frame on any pair:
+     the hotspot's traffic paused. Expected with a phone as the source; it
+     costs captures, not accuracy.
+
+NEXT STEPS
+  1. Confirm point 4: power-cycle all four again and re-run without moving
+     anything. If the offsets change again, per-session calibration is a
+     hard requirement for the field.
+  2. A longer run (30+ min) to see whether the offsets hold within a
+     session and how large the slow wander is.
+  3. Software: a per-node clock offset in the site config + supernode, and
+     a calibration procedure that measures it (this tool already produces
+     the numbers relative to one board).
+
+EARLIER TODAY
+  - Two-board run (1970XX vs 1974XX, before the replug): scatter 39.9 ns
+    std / 25.9 MAD, 3-12 ns within 30 s, mean +218 ns.
+  - Fixed today in the driver: a board could align exactly 1 s off
+    (gps_time label); the host clock now decides the second.
+  - 1974XX once ran free at -15.3 ppm (not disciplined) until power-cycled.
+
+Per-capture data: four_board.csv (kept in the session scratchpad only).
+
+
+=====================================================================
+Part 2: RECEIVE SIDE -- GAIN, PORTS, ANTENNAS (evening, at home)
+=====================================================================
+
+BOARDS AND SETUP
+  Boards 1 (1970XX) and 4 (1971XX), two 2.4 GHz antennas each, 6.1 cm
+  apart, on the RX connectors. Desk router TP-Link_7D69 (channel 1) on for
+  part of the tests; phone hotspot ESP32-Dioda used as a test source.
+
+1. THE GAIN WAS TOO LOW FOR EVERY EARLIER RECEIVE TEST
+   Noise floor (median power, dBFS) against receive gain:
+                     0 dB    20 dB    40 dB    60 dB    76 dB
+     board 1        -65.7    -61.9    -60.2    -44.1    -28.9
+     board 4        -65.6    -61.9    -60.8    -45.5    -30.7
+   Up to ~40 dB the floor barely moves: it is the converter's own noise.
+   Above ~45 dB it rises ~0.9 dB per dB: the front end's real noise.
+   -> At 30-40 dB (used all day) weak signals sit 15-20 dB under a masking
+      floor: antennas, ports and directions all look the same.
+   -> USE ~60 dB. The project's B210 site files and tools now default to 60
+      (they were 32-40). At 60 a router ~1 m away peaked at 67% of full
+      scale, so there is headroom.
+   The receive chain itself works: both local oscillators lock
+   (lo_locked true), tuned exactly to the requested frequency.
+
+2. RX2 vs TX/RX MADE NO MEASURABLE DIFFERENCE ON THESE BOARDS
+   At 60 dB, on every band from 800 MHz to 2.66 GHz (mobile networks and
+   the router), selecting "RX2" or "TX/RX" in UHD gave identical power to
+   0.0-0.1 dB on both boards. The ports are u.FL on the board, brought out
+   by IPEX-to-SMA cables. Why the selection changes nothing is not
+   established (how the clone wires the RF switch is one possibility); what
+   it means for testing is that comparing "antenna port" with "empty TX/RX
+   port" told us nothing today.
+
+3. THE ANTENNAS WORK (the decisive test)
+   Phone hotspot in ANOTHER ROOM (5-10 m, through a wall), channel 11,
+   laptop Wi-Fi off, gain 60, 20 s per board, bursts > 6 dB counted:
+                         antennas ON    antennas OFF
+     board 4 (vertical)      408             4
+     board 1 (horizontal)     49             6
+   With antennas the distant phone is detected ~100x (board 4) / ~8x
+   (board 1) more often: without them it is mostly below the threshold.
+   Compare COUNTS, not the mean level of detected bursts: with antennas off
+   only the rare strongest bursts pass the threshold, so their mean level
+   looks higher and the comparison inverts (the script printed "-2 dB").
+
+4. POLARISATION: MOUNT ANTENNAS VERTICAL
+   Same phone, same room: board 4 with vertical antennas 408 detections,
+   board 1 with horizontal antennas 49. Wi-Fi and drone links are mostly
+   vertically polarised; a horizontal element also has a null along its
+   own axis. Every field node: vertical antennas, all oriented alike.
+
+5. A NEAR SOURCE IS NOT A TEST
+   The router ~1 m away, per burst, gain 60: +18 to +22 dB with the
+   antennas OFF, and the antennas added only 1-4 dB. At that range it
+   couples into the cables and the board directly. The same effect made
+   all of today's earlier tests near the router look port-independent.
+
+6. BEARING (two-antenna direction finding) -- see Part 3: inconclusive
+   (both channels responded to both antennas in that setup; cause open).
+
+WHAT WENT WRONG IN MY TESTING TODAY (so it is not repeated)
+  - I measured at 30-40 dB gain, where the converter's noise hides weak
+    signals, and concluded the antennas did nothing. They work.
+  - I compared "RX2" with "TX/RX" as antenna vs empty port; on this board
+    the selection changed nothing, so the comparison was empty.
+  - I relied on one sequential, burst-dependent comparison in the morning
+    ("+24 dB vs +2.9 dB") and called the antennas verified; it was not a
+    valid test either way.
+
+CHANGES MADE TO THE PROJECT
+  - config/site-b210.json, site-field.json, site-mixed-b210.json:
+    B210 nodes and hardware.gain_db 32/36/40 -> 60 (with the reason).
+  - node.py UHD fallback gain 40 -> 60; hw_selftest.py and
+    tools/two_board_timing.py default gain -> 60.
+  - docs/splitter_calibration.md: port section rewritten (RX2 vs TX/RX
+    made no difference, physical antenna test at 60 dB with a far source,
+    vertical mounting).
+  - Project notes (both copies): priority item 1 updated with the four-board
+    timing results, per-power-up offsets, GPSDO hangs, gain and antennas.
+  - Driver: a board aligning one second off is now relabelled against the
+    host clock; tools/two_board_timing.py handles N boards (all pairs, per-
+    board offsets, loop closure) and opens boards one at a time.
+
+NEXT
+  1. Reference emitter on the 5th B210 (per-session calibration of the
+     clock offsets, which reset at every power-up).
+  2. Repeat the bearing test at 60 dB with vertical antennas.
+  3. Nodes on mini-PCs, spread out, for a real localization test.
+  4. A longer timing run (30+ min) for the slow wander.
+
+
+=====================================================================
+Part 3: TWO-ANTENNA DIRECTION FINDING (night 26/27, board 4, at home)
+=====================================================================
+
+SETUP
+  Board 4 (1971XX), two vertical 2.4 GHz antennas 6.1 cm apart (lambda/2)
+  on its two RX connectors, gain 60, router off, laptop Wi-Fi off during
+  each recording, phone hotspot as the source. Scripts wait for ENTER and
+  count down 10 s before each 20 s recording.
+
+1. BEARING: THE PHASE DOES NOT MOVE WITH DIRECTION
+   Phone straight in front (A), 45 deg left (L), 45 deg right (R):
+     < 1 m,   USB 3:  relative phase  0 / +3.5 / +16.7 deg
+     3-5 m,   USB 3:                  0 / +3.2 /  +1.1 deg
+     3-5 m,   USB 2:                  0 / +11.9 / +2.9 deg
+   Expected about 0 / +-127 / -+127 deg. Coherence between the channels
+   0.89-0.999 throughout: both channels see practically the same signal.
+
+2. USB 3 RADIATES INTO BOTH RECEIVERS
+   Coherence between channel 0 and 1 on NOISE ONLY (no bursts):
+                   1000 MHz   2422 MHz   3500 MHz
+     USB 3           0.50       0.47       0.54
+     USB 2           0.03       0.01       0.08
+   Two separate receivers have independent noise (~0). On USB 3 about half
+   of the noise floor was a common signal: the board's own 5 Gbps link.
+   Forced to USB 2 without a cable (as root):
+     echo 1 > /sys/bus/usb/devices/usb2/2-0:1.0/usb2-port1/disable
+   (undo with 0 and replug). On USB 2 the B210 needs
+   recv_frame_size=2048,num_recv_frames=64 and <= 2 Msps x 2 channels, or
+   libusb throws LIBUSB_TRANSFER_OVERFLOW intermittently.
+   -> Field: ferrite or shielded USB 3 cables, antennas away from the
+      cable, metal enclosure per node.
+
+3. BOTH CHANNELS RECEIVE BOTH ANTENNAS (USB 2, phone 3-5 m, still)
+   Strongest 10 % of bursts, above each channel's own floor:
+                         channel 0     channel 1
+     both antennas on     +25.3 dB      +25.1 dB
+     left antenna off     +19.6 (-5.7)  +18.6 (-6.5)
+     right antenna off    +22.0 (-3.3)  +20.5 (-4.6)
+   Removing EITHER antenna lowers BOTH channels by about the same amount.
+   With isolated inputs it would lower only its own channel. The receiver
+   noise is independent (point 2), so the two receive chains are separate;
+   where the coupling happens is NOT established. A shared RF path on the
+   board is one explanation; mutual coupling between two antennas 6 cm
+   apart, leakage between the u.FL cables and connectors, and a source
+   close enough to couple into the cables directly (point 5 of Part 2) are
+   others that this setup cannot rule out. Whatever the cause, the phase
+   difference carried no direction here.
+
+CONCLUSION
+  - Two-antenna direction finding did not work in this setup, and the test
+    does not say why. Do not conclude the board has one RX input: the B210
+    design has two independent receive chains and the noise measurement
+    agrees. Before blaming the board, repeat with the antennas isolated
+    (separate cables, physical separation or a shield between them, a far
+    source) and, if the coupling persists, ask HamGeek how RX1 and RX2 are
+    wired. (Observed: removing either antenna lowers both channels by
+    3-6 dB; channel coherence 0.999 on the same signal.)
+  - TDOA is unaffected: it uses one channel per node.
+  - USB 3 interference is real and large; mitigate it at every node.
+
+
+=====================================================================
+Part 4: field, 2026-10-28 -- the field site, four TinyB210 nodes + HALO
+=====================================================================
+
+Source: the field session's commits (3b33c4d, 124739a, b4e7c63). The
+field logs, the site file actually used and the per-pair measurement
+files stayed on the field machines and are not in the repository.
+
+1. THE DEVICE CLOCK DRIFTS AGAINST GPS
+   The GPSTCXO steers the oscillator's frequency only roughly, and nothing
+   holds the device clock's phase: it is set once, on a PPS edge, at
+   alignment, and then walks away from GPS time.
+     drift per board        about -1 ns/s (-550..-600 ns in 10 min)
+     between boards         12-15 ns/min
+     TDOA offsets in field  hundreds of ns, up to 2 us, growing with uptime
+   This is what Part 1 read as "constant offsets that change at every
+   power-up": its runs were a few minutes long, too short to tell drift
+   from an offset.
+
+2. THE CORRECTION (dronelocate/uhd_source.py)
+   Every PPS edge is timestamped by the device. A thread polls
+   get_time_last_pps at 5 Hz and records each edge's phase; a straight
+   line through the last 60 edges gives the clock error at any moment,
+   and every capture timestamp has it subtracted (metadata pps_corr_ns).
+   One edge reads only to the tick (25 ns at 40 MHz); the fit through 60
+   is well under that. Node health: pps_phase_ns, pps_phase_fit_ns,
+   pps_drift_ns_per_s.
+
+3. RESULT WITH THE CORRECTION
+     all four nodes right after a full restart   within +-60 ns
+     change over 15 min                          20-45 ns
+     solver residual                             366 ns -> 10-28 ns
+
+4. WHAT REMAINS
+   A per-node offset of tens of ns. nodes[].timing_offset_ns in the site
+   file takes it out; DL_MEAS_LOG=file.jsonl makes the supernode append
+   every all-pairs burst's per-pair lags, which is the input a reference
+   emitter at a known spot needs to measure those offsets. The reference
+   emitter is still needed -- for tens of ns now, not microseconds.
+
+5. RADAR (HALO) IN THE FIELD
+   - DHCP moved it .231 -> .249 -> .237. radars[].serial now finds it at
+     whatever address it answers on and ignores a second radar on the
+     LAN; radars[].ip only picks the interface to discover on.
+   - It powers up in standby. radars[].auto_transmit sends transmit on
+     every connect, for an unattended site after a power cut. Opt-in in
+     the site file, because the radar is a transmitter.
+
+6. CONSOLE ON A SMALL SITE
+   The nodes were ~23 m apart, less than one 34 m node marker. The console
+   now scales markers, grid and camera to the node spread (vertical x1
+   under 1 km), hides an uncertainty ellipsoid more than 20x the array
+   behind an "unconstrained" banner, and shows the fleet status before
+   the first fix.

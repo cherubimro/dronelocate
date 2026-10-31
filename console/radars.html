@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dronelocate — radar consoles</title>
+<style>
+  /* Every radar range's own console on one page. The consoles are the radar
+     nodes' (testradar's viewer.html, range A green, range B navy); this page
+     only frames them. Each frame renders at the viewer's desktop width and
+     is scaled to its column, so the layout never collapses into its
+     narrow-screen form just because two share a screen. */
+  :root { --bg:#05080c; --line:#1b2730; --text:#d6e4e1; --muted:#78908f;
+          --a:#3ee08f; --b:#5b9bff; --warn:#f2b63c; --bad:#ff5a5a;
+          --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace; color-scheme:dark; }
+  * { box-sizing:border-box; }
+  html, body { height:100%; margin:0; background:var(--bg); color:var(--text);
+               font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  body { display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:14px; padding:8px 14px;
+           border-bottom:1px solid var(--line); flex:none; }
+  header h1 { margin:0; font:600 14px/1 var(--mono); letter-spacing:.06em; }
+  .chip { display:inline-flex; align-items:center; gap:8px; padding:4px 10px;
+          border:1px solid var(--line); border-radius:999px; font:600 11px/1 var(--mono);
+          letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+  .chip i { width:8px; height:8px; border-radius:50%; background:currentColor; }
+  .chip.A { color:var(--a); } .chip.B { color:var(--b); }
+  .chip .st { color:var(--muted); font-weight:500; }
+  .chip.off { opacity:.45; }
+  #grid { flex:1; display:flex; min-height:0; }
+  .col { flex:1; position:relative; overflow:hidden; border-right:1px solid var(--line); }
+  .col:last-child { border-right:0; }
+  .col iframe { position:absolute; top:0; left:0; border:0; transform-origin:0 0; background:var(--bg); }
+  /* each range's own console, full screen on its own port: in the strip
+     only -- a button on the frame covered the viewer's Recording card */
+  .chip a { color:inherit; text-decoration:none; border-left:1px solid var(--line); padding-left:8px; }
+  .chip a:hover { text-decoration:underline; }
+  #empty { margin:auto; max-width:560px; color:var(--muted); text-align:center; line-height:1.6; }
+  #empty code { color:var(--text); }
+</style>
+</head>
+<body>
+<header>
+  <h1>RADAR</h1>
+  <span id="chips"></span>
+  <span style="flex:1"></span>
+  <span class="chip" style="border:0">3D console <a href="#" id="c3d" style="color:var(--text)">:8080</a></span>
+</header>
+<div id="grid"><div id="empty">Waiting for a radar node to announce its console…<br>
+  Start one with <code>--http-port 8082</code> (range A) or <code>--scanner 1 --http-port 8083</code>
+  (range B), or <code>./run_demo.sh --radar-live</code> / <code>--radar-replay FILE</code>.
+  An emulated radar has no spokes, so it has no console.</div></div>
+<script>
+// The viewer's desktop layout width: frames render at this and are scaled.
+const DESIGN_W = 1500;
+const $ = id => document.getElementById(id);
+$("c3d").href = `${location.protocol}//${location.hostname}:8080/`;
+const frames = new Map();            // console url -> {col, iframe}
+
+const rangeOf = id => id.includes(":") ? id.split(":")[1] : "A";
+function fit(){
+  for (const {col, iframe} of frames.values()){
+    const w = col.clientWidth, h = col.clientHeight, s = w / DESIGN_W;
+    iframe.style.width = DESIGN_W + "px";
+    iframe.style.height = (h / s) + "px";
+    iframe.style.transform = `scale(${s})`;
+  }
+}
+addEventListener("resize", fit);
+
+async function poll(){
+  let rows = [];
+  try { rows = await (await fetch("/radars.json")).json(); } catch { return; }
+  rows.sort((a, b) => a.id < b.id ? -1 : 1);
+  const port = u => { try { return ":" + new URL(u).port; } catch { return u; } };
+  $("chips").innerHTML = rows.map(r => {
+    const rg = rangeOf(r.id);
+    const st = r.state === "available" && r.rpm ? `${r.state} · ${r.rpm.toFixed(0)} rpm` : (r.state || "—");
+    const link = r.console_url
+      ? `<a href="${r.console_url}" target="_blank" title="range ${rg} full screen: ${r.console_url}">⤢ ${port(r.console_url)}</a>` : "";
+    return `<span class="chip ${rg} ${r.console_url ? "" : "off"}" title="${r.console_url || "no console announced"}">`
+         + `<i></i>${r.id.split(":")[0]} range ${rg}<span class="st">${st}${r.enabled === false ? " · fusion off" : ""}</span>${link}</span>`;
+  }).join(" ");
+  const want = rows.filter(r => r.console_url).map(r => r.console_url);
+  // Add frames for new consoles, drop vanished ones; never reload a live one.
+  for (const url of [...frames.keys()])
+    if (!want.includes(url)){ frames.get(url).col.remove(); frames.delete(url); }
+  // A new frame is inserted once, at its place in A, B order. A live frame
+  // is never moved: moving an iframe in the DOM reloads it, and re-appending
+  // them all to keep the order made both consoles reload every poll.
+  want.forEach((url, i) => {
+    if (frames.has(url)) return;
+    const col = document.createElement("div"); col.className = "col";
+    const iframe = document.createElement("iframe"); iframe.src = url; iframe.title = url;
+    col.appendChild(iframe);
+    const next = want.slice(i + 1).find(u => frames.has(u));
+    $("grid").insertBefore(col, next ? frames.get(next).col : null);
+    frames.set(url, {col, iframe});
+  });
+  $("empty").style.display = frames.size ? "none" : "";
+  fit();
+}
+poll(); setInterval(poll, 2000);
+</script>
+</body>
+</html>

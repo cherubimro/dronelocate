@@ -1,0 +1,45 @@
+[Unit]
+# The supernode. This is also the Zenoh hub -- there is no separate broker to
+# install. It listens on 7447 for the sensor nodes, and serves the 3D console
+# on 8080 and the spectrum dashboard on 8081.
+Description=dronelocate supernode (correlator, tracker, Zenoh hub, consoles)
+After=network-online.target
+Wants=network-online.target
+
+# Never give up. Nodes retry forever by design (zconf.spoke sets an infinite
+# connect timeout with 500 ms -> 4 s backoff), so a supernode that stayed down
+# after five restarts would strand a whole fleet that is still trying.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=@@DIR@@
+User=@@USER@@
+
+EnvironmentFile=@@ENVDIR@@/dronelocate-supernode
+
+# Python block-buffers stdout when it is not a terminal, and under systemd it
+# never is. Without this, journalctl shows nothing for minutes and a healthy
+# supernode looks hung.
+Environment=PYTHONUNBUFFERED=1
+
+# sh -c because the interpreter is a variable: Debian's system python3, or a
+# virtualenv's, depending on how the dependencies were installed.
+ExecStart=/bin/sh -c 'exec "$PYTHON" supernode.py --config "$CONFIG" --bind "$BIND" --port "$ZPORT" --http-port "$HTTP_PORT" --spec-port "$SPEC_PORT" $EXTRA'
+
+Restart=always
+RestartSec=5
+
+# SIGINT, not SIGTERM: the shutdown path is a KeyboardInterrupt handler that
+# closes the Zenoh session cleanly.
+KillSignal=SIGINT
+TimeoutStopSec=15
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=@@DIR@@
+
+[Install]
+WantedBy=multi-user.target

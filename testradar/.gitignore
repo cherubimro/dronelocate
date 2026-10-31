@@ -1,0 +1,10 @@
+__pycache__/
+*.egg-info/
+build/
+.venv/
+# browser test environment built by tests/setup_browser.sh
+tests/.env/
+# uncompressed recordings: commit them as .navrec.gz (about 25x smaller)
+*.navrec
+# render outputs
+*.png

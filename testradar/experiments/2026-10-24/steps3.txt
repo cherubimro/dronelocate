@@ -1,0 +1,16 @@
+target-boost 1 setup.target_boost=1
+target-boost 0 setup.target_boost=0
+target-expansion 2 setup.target_expansion=2
+target-expansion 1 setup.target_expansion=1
+noise 1 setup_extended.noise_rejection=1
+noise 2 setup_extended.noise_rejection=2
+target-separation 2 setup_extended.target_separation=2
+target-separation 1 setup_extended.target_separation=1
+local-interference 1 setup_extended.local_interference_rejection=1
+local-interference 0 setup_extended.local_interference_rejection=0
+scan-speed 0 setup_extended.scan_speed=0
+scan-speed 1 setup_extended.scan_speed=1
+sea 30
+sea auto
+sea auto+10
+sea-state 1

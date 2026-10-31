@@ -1,0 +1,694 @@
+<meta charset="utf-8">
+<title>dronelocate — RF spectrum</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  /* Surfaces and ink are the 3D console's tokens, so the two screens read as
+     one product. The three series colours are NOT the console's -- they are
+     the validated categorical slots 1-3, which pass the lightness band,
+     chroma floor, all-pairs CVD separation and 3:1 contrast against this
+     exact surface. The console's orange/teal/magenta do not. */
+  :root{
+    --ink:#0b1016; --ink2:#111924; --rule:#1e2a38; --rule2:#2b3b4d;
+    --paper:#dde6ef; --dim:#65798f; --hw:#ff3ce0;
+    --avg:#3987e5;   /* categorical 1 - blue   */
+    --max:#d95926;   /* categorical 2 - orange */
+    --min:#199e70;   /* categorical 3 - aqua   */
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--ink);color:var(--paper);font:12px/1.45 var(--mono);
+       padding:12px;-webkit-font-smoothing:antialiased}
+  header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+         padding-bottom:10px;border-bottom:1px solid var(--rule);margin-bottom:12px}
+  h1{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+  .sub{color:var(--dim)}
+  .spacer{flex:1}
+  /* Legend is not optional: three series must never be identified by colour
+     alone, and this one doubles as the readout for the shared dB scale. */
+  .legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  .key{display:inline-flex;align-items:center;gap:5px;color:var(--dim)}
+  .key i{width:14px;height:2px;border-radius:1px;display:inline-block}
+  .ramp{width:120px;height:8px;border-radius:2px;display:inline-block;
+        border:1px solid var(--rule2)}
+  #grid{display:grid;gap:12px;
+        grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
+  .panel{background:var(--ink2);border:1px solid var(--rule);border-radius:3px;
+         padding:8px 10px 10px;min-height:268px;contain:layout paint}
+  .panel.used{border-color:var(--avg)}
+  .panel.hw{border-color:var(--hw)}
+  .phead{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
+  .nid{font-weight:600;letter-spacing:.04em}
+  /* No rank, no re-ordering. Both were attempts to show "which sensor is
+     loudest" and both moved something on every update -- first the panels,
+     then a number in each header. RSSI is already printed on every panel
+     and does not twitch. */
+  .panel.hw .nid{color:var(--hw)}
+  /* Fixed width and fixed panel height: every text in here changes as the
+     fleet retunes ("in fix" / "uas_ofdm" / "-"), and letting those reflow
+     the header is one more way for the page to move under a reader. */
+  .badge{font-size:9px;letter-spacing:.08em;text-transform:uppercase;
+         padding:1px 5px;border-radius:2px;border:1px solid var(--rule2);
+         color:var(--dim);min-width:66px;text-align:center;
+         white-space:nowrap;overflow:hidden}
+  .badge.on{border-color:var(--avg);color:var(--avg)}
+  /* Signal present: an explicit mark rather than a colour shift,
+     so it reads in greyscale and for a colourblind operator. The
+     borders already mean role (hardware) and participation (used
+     in the fix); overloading them with a third meaning would make
+     all three unreadable. */
+  /* Mark the EXCEPTION, not the norm. Every emulated node renders the
+     emitter into every capture, so a "has signal" dot is on for all of
+     them forever and says nothing. What is worth seeing at a glance is a
+     sensor that is NOT hearing: a real radio on a quiet band, a node that
+     has gone deaf, a target out of range of one corner of the site.
+     NB: distinct class names -- 'quiet' is the panel STATE, 'quietmark'
+     the mark. Using one name for both previously put display:none on the
+     panel and hid every node that qualified. */
+  .quietmark{display:none;color:var(--dim);font-size:9px;letter-spacing:.06em}
+  .panel.quiet .quietmark{display:inline}
+  .panel.quiet{opacity:.62}
+  .panel.quiet .nid{color:var(--dim)}
+  .num{color:var(--paper);font-variant-numeric:tabular-nums}
+  .lbl{color:var(--dim)}
+  canvas{display:block;width:100%;image-rendering:pixelated;border-radius:2px}
+  .wf{height:120px;background:var(--ink)}
+  .pg{height:96px;background:var(--ink);margin-top:4px;cursor:crosshair}
+  .axis{display:flex;justify-content:space-between;color:var(--dim);
+        font-size:10px;margin-top:2px}
+  #tip{position:fixed;pointer-events:none;background:var(--ink2);
+       border:1px solid var(--rule2);border-radius:3px;padding:5px 7px;
+       font-size:11px;display:none;z-index:9;white-space:pre}
+  #empty{color:var(--dim);padding:24px 0}
+  a{color:var(--avg)}
+</style>
+
+<header>
+  <h1>RF spectrum</h1>
+  <span class="sub" id="meta">waiting for nodes…</span>
+  <span class="spacer"></span>
+  <div class="legend">
+    <label class="key">avg over
+      <select id="win">
+        <option value="15">15 s</option>
+        <option value="30">30 s</option>
+        <option value="60" selected>60 s</option>
+        <option value="120">120 s</option>
+        <option value="0">all held</option>
+      </select>
+    </label>
+    <label class="key">view
+      <select id="chan"><option value="strong">strongest</option></select>
+    </label>
+    <label class="key">map
+      <select id="cmap">
+        <option value="linear" selected>linear</option>
+        <option value="classic">classic</option>
+      </select>
+    </label>
+    <span class="key"><i style="background:var(--max)"></i>max</span>
+    <span class="key"><i style="background:var(--avg)"></i>avg</span>
+    <span class="key"><i style="background:var(--min)"></i>min</span>
+    <span class="key" style="margin-left:6px">
+      <span id="lo">—</span><span class="ramp" id="ramp"></span><span id="hi">—</span>&nbsp;dB
+    </span>
+  </div>
+</header>
+<div id="empty">No spectrum frames yet. Nodes publish one per capture on
+  <code>dc/&lt;site&gt;/&lt;node&gt;/spectrum</code>.</div>
+<div id="grid"></div>
+<div id="tip"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// DEFAULT: sequential = one hue, monotonic in lightness. High power is the
+// bright end against a dark surface.
+//
+// CLASSIC: the WebSDR-style rainbow, on request and not the default. It is
+// genuinely worse for the question this screen answers -- a rainbow puts
+// bright bands at arbitrary levels, so it invents edges where the spectrum
+// is smooth and flattens real steps where it is not, and comparing two
+// nodes' levels by hue is guesswork. It is also what every RF operator has
+// spent twenty years reading, which is a real argument. Kept as a toggle so
+// the choice is explicit rather than baked in.
+const RAMPS = {
+  linear: ['#0d366b','#104281','#184f95','#1c5cab','#256abf','#2a78d6',
+           '#3987e5','#5598e7','#6da7ec','#86b6ef','#9ec5f4','#b7d3f6','#cde2fb'],
+  classic:['#000010','#000040','#0000a0','#0040ff','#00a0ff','#00e0e0',
+           '#00d060','#40e000','#c0e000','#ffc000','#ff6000','#ff1010','#ffffff'],
+};
+const hex2rgb = h => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16),
+                      parseInt(h.slice(5,7),16)];
+function buildLut(name){
+  const ramp = (RAMPS[name] || RAMPS.linear).map(hex2rgb);
+  const out = new Uint8Array(256*3);
+  for (let i=0;i<256;i++){
+    const x = i/255*(ramp.length-1), k = Math.min(Math.floor(x), ramp.length-2);
+    const f = x-k, a = ramp[k], b = ramp[k+1];
+    out[i*3]   = a[0]+(b[0]-a[0])*f;
+    out[i*3+1] = a[1]+(b[1]-a[1])*f;
+    out[i*3+2] = a[2]+(b[2]-a[2])*f;
+  }
+  return out;
+}
+let cmapName = localStorage.getItem('dl.cmap') || 'linear';
+let LUT = buildLut(cmapName);
+
+// Retained rows per node. The waterfall shows the newest WF_ROWS of these;
+// the periodogram averages over a wall-clock window, which is a different
+// thing and used not to be. 600 frames is 5 minutes at 2 bursts/s and costs
+// ~150 kB per node.
+const ROWS_MAX = 600;
+// Waterfall depth is chosen from the rate frames actually arrive on the
+// displayed channel, not fixed. A scanning fleet observes each band at
+// burst_rate / n_channels -- 0.5 rows/s for four channels at 2 bursts/s --
+// so a 180-row canvas is six minutes of history advancing two thirds of a
+// pixel per frame, which reads as stalled. Target a fixed WINDOW instead
+// and let the row count follow, so each new frame is a visible step
+// whatever the scan configuration.
+const WF_TARGET_S = 90;
+let WF_ROWS = 90, rowsAt = 0;
+const ROWS = 180;               // kept for the header text
+const hist = new Map();         // node -> {rows:[Uint8Array], meta:{...}}
+const panels = new Map();
+let used = new Set(), nodeOrder = [];
+let avgWindowS = +(localStorage.getItem('dl.win') ?? 60);
+
+// Panel order is re-ranked on a timer, not every frame. Sorting by
+// instantaneous RSSI looked fine on a staring fleet and is unusable on a
+// scanning one: retuning swings every node between signal and noise floor,
+// so the grid reshuffled about twenty times a second. Rank on a slow mean
+// instead, and only commit a new order every ORDER_HOLD_MS.
+const ORDER_HOLD_MS = 4000;
+// Which channel the panels show. "strong" holds whichever channel carries
+// the most signal, which for a scanning fleet is stable -- it parks on the
+// band the emitter is in and stays there. "follow" tracks the fleet and is
+// what made the display cycle: the panels were not flickering, they were
+// correctly showing a different BAND four times a second. A fixed value
+// pins one channel regardless.
+let chanMode = localStorage.getItem('dl.chan') || 'strong';
+let heldFc = 0, heldAt = 0;
+// The channel currently drawn. The hover handler redraws the periodogram to
+// lay a crosshair over it, and without this it recomputed the stats with NO
+// channel filter -- mixing every band the scan has visited into one
+// min/avg/max. That looked like more detail and was simply a different,
+// wrong quantity, which is why the traces "got proper" under the cursor.
+let viewFc = 0;
+const HOLD_MS = 3000;
+let scanPlan = [], scanDwellS = 0;
+let orderMap = new Map(), orderAt = 0;
+let threshDb = 8.0;      // replaced by the server's real value
+
+// One dB scale for every panel. Per-panel autoscale would make the loudest
+// and the deafest sensor look identical, which is the one question this
+// screen exists to answer.
+let dbLo = -110, dbHi = -30;
+
+function decodeBins(b64){
+  const s = atob(b64), a = new Uint8Array(s.length);
+  for (let i=0;i<s.length;i++) a[i] = s.charCodeAt(i);
+  return a;
+}
+const toDb = (v, m) => m.db_ref + v * m.db_step;
+// Channel identity, for every "same channel?" comparison on this page. A
+// real radio reports the frequency it actually tuned to (the project rule:
+// adopt get_rx_freq, never the request), and a TinyB210 asked for 2437 MHz
+// reports 2436999999.997 Hz. Compared exactly against the emulated fleet's
+// 2437000000, every one of its frames counted as "another channel": its
+// waterfall and traces were filtered to nothing and the panel drew as dead.
+// Snap to 1 kHz -- far below any channel spacing, far above any tuning
+// error. Axis labels still use the reported frequency (h.meta.fc_hz).
+const chanKey = fc => fc ? Math.round(fc / 1e3) * 1e3 : 0;
+
+function ensurePanel(node){
+  if (panels.has(node)) return panels.get(node);
+  const el = document.createElement('div');
+  el.className = 'panel';
+  el.innerHTML = `
+    <div class="phead">
+      <span class="nid">${node}</span><span class="quietmark" title="below the fleet detect threshold">no sig</span>
+      <span class="badge" data-used>—</span>
+      <span class="spacer" style="flex:1"></span>
+      <span><span class="lbl">RSSI</span> <span class="num" data-rssi>—</span></span>
+      <span><span class="lbl">SNR</span> <span class="num" data-snr>—</span></span>
+    </div>
+    <canvas class="wf"></canvas>
+    <canvas class="pg"></canvas>
+    <div class="axis"><span data-f0>—</span><span data-fc>—</span><span data-f1>—</span></div>`;
+  $('grid').appendChild(el);
+  const p = {el, wf:el.querySelector('.wf'), pg:el.querySelector('.pg'), node};
+  p.wctx = p.wf.getContext('2d');
+  p.pctx = p.pg.getContext('2d');
+  attachHover(p);
+  panels.set(node, p);
+  return p;
+}
+
+function push(row){
+  const bins = decodeBins(row.bins);
+  let h = hist.get(row.node);
+  if (!h){ h = {rows:[], ts:[], rssi:[], fc:[], snr:[], cls:[], meta:row};
+           hist.set(row.node, h); }
+  h.meta = row;
+  h.rows.push(bins);
+  h.ts.push(row.t || (Date.now()/1000));
+  h.rssi.push(row.rssi_dbm ?? -999);
+  h.fc.push(chanKey(row.fc_hz));
+  h.snr.push(row.snr_db ?? -99);
+  h.cls.push(row.cls || 'unknown');
+  while (h.rows.length > ROWS_MAX){
+    h.rows.shift(); h.ts.shift(); h.rssi.shift();
+    h.fc.shift(); h.snr.shift(); h.cls.shift();
+  }
+}
+
+// Shared range, derived from the traces that will actually be drawn.
+//
+// It used to be computed from the newest frame alone, which is wrong in a
+// way that shows: the periodogram plots max over the whole window, so a
+// burst that was louder 30 s ago exceeds a ceiling set by the latest frame,
+// the max trace clips at y=0 and sits pinned against the waterfall above it.
+// The ceiling must therefore be the windowed max, not an instantaneous
+// quantile. The floor stays a low quantile of the minima -- one dead bin
+// should not stretch the scale downwards and flatten everything else.
+function rescale(stats){
+  if (!stats.size) return;
+  let hi = -Infinity;
+  const lows = [];
+  for (const s of stats.values()){
+    for (let i=0;i<s.n;i++){
+      if (s.mx[i] > hi) hi = s.mx[i];
+      if (i % 4 === 0) lows.push(s.mn[i]);
+    }
+  }
+  if (!lows.length || !isFinite(hi)) return;
+  lows.sort((a,b)=>a-b);
+  const q = f => lows[Math.min(lows.length-1, Math.max(0, Math.floor(f*lows.length)))];
+  // Slew limit. The range is shared, so any jump recolours every waterfall
+  // at once -- and a scanning fleet moves 40 dB between an on-channel dwell
+  // and an empty one, which reads as the whole screen flashing. Creep
+  // instead: 2 dB per update reaches a 40 dB step in about ten seconds and
+  // never strobes.
+  const wantLo = Math.floor(q(0.05) - 3);
+  const wantHi = Math.ceil(hi + 3);
+  const SLEW = 2.0;
+  dbLo += Math.max(-SLEW, Math.min(SLEW, wantLo - dbLo));
+  dbHi += Math.max(-SLEW, Math.min(SLEW, wantHi - dbHi));
+  if (dbHi - dbLo < 20) dbHi = dbLo + 20;
+  $('lo').textContent = dbLo;
+  $('hi').textContent = dbHi;
+}
+
+function drawWaterfall(p, h, onlyFc){
+  const n = h.meta.n_bins || h.rows[0].length;
+  const cv = p.wf;
+  if (cv.width !== n || cv.height !== WF_ROWS){ cv.width = n; cv.height = WF_ROWS; }
+  const img = p.wctx.createImageData(n, WF_ROWS);
+  const span = Math.max(dbHi - dbLo, 1);
+  // Newest first, skipping frames from other channels: every row of a
+  // waterfall must share an x-axis or the picture is a lie.
+  const idx = [];
+  for (let r=h.rows.length-1; r>=0 && idx.length<WF_ROWS; r--)
+    if (!onlyFc || h.fc[r] === onlyFc) idx.push(r);
+  for (let r=0;r<idx.length;r++){
+    const src = h.rows[idx[r]];
+    const off = r*n*4;
+    for (let i=0;i<n;i++){
+      const db = toDb(src[i], h.meta);
+      const t = Math.max(0, Math.min(255, ((db - dbLo)/span)*255)) | 0;
+      img.data[off+i*4]   = LUT[t*3];
+      img.data[off+i*4+1] = LUT[t*3+1];
+      img.data[off+i*4+2] = LUT[t*3+2];
+      img.data[off+i*4+3] = 255;
+    }
+  }
+  p.wctx.putImageData(img, 0, 0);
+}
+
+// min / max / avg over the retained history: the classic peak-hold view.
+// max shows the strongest thing this sensor has seen in the window, min is
+// its noise floor, and the gap between them is how much of the band is
+// actually being used.
+// Window is wall-clock seconds, NOT a frame count. A frame count silently
+// means different things at different burst rates -- 180 frames is 90 s at
+// 2 bursts/s and 180 s at 1 -- so two fleets would average over different
+// periods with nothing on screen admitting it. `span` is reported back so
+// the header can state the period actually achieved, which is shorter than
+// requested until enough history has accumulated.
+function stats(h, windowS, onlyFc){
+  // Frames from other channels are excluded, not averaged in. A min/max/avg
+  // taken across different centre frequencies is not a spectrum of anything
+  // -- bin 40 is a different frequency on every row -- so under a scan the
+  // traces would blend bands that were never observed together.
+  const n = h.meta.n_bins || h.rows[0].length;
+  const newest = h.ts[h.ts.length-1] || 0;
+  let from = 0;
+  if (windowS > 0)
+    while (from < h.ts.length-1 && newest - h.ts[from] > windowS) from++;
+  const mn = new Float32Array(n).fill(Infinity);
+  const mx = new Float32Array(n).fill(-Infinity);
+  const av = new Float32Array(n);
+  let cnt = 0;
+  for (let r=from;r<h.rows.length;r++){
+    if (onlyFc && h.fc[r] !== onlyFc) continue;
+    const row = h.rows[r];
+    for (let i=0;i<n;i++){
+      const d = toDb(row[i], h.meta);
+      if (d < mn[i]) mn[i] = d;
+      if (d > mx[i]) mx[i] = d;
+      av[i] += d;
+    }
+    cnt++;
+  }
+  if (!cnt){                       // nothing on this channel yet
+    mn.fill(0); mx.fill(0); av.fill(0);
+  } else {
+    for (let i=0;i<n;i++) av[i] /= cnt;
+  }
+  return {mn, mx, av, n, cnt, span: newest - (h.ts[from] || newest)};
+}
+
+function drawPeriodogram(p, h, pre){
+  const s = pre || stats(h, avgWindowS, h.panelFc ?? viewFc);
+  const cv = p.pg, W = cv.clientWidth || 320, H = 96;
+  if (cv.width !== W || cv.height !== H){ cv.width = W; cv.height = H; }
+  const c = p.pctx;
+  c.clearRect(0,0,W,H);
+  const span = Math.max(dbHi - dbLo, 1);
+  // PAD keeps a trace sitting exactly at the ceiling off the top edge, so a
+  // max line at full scale reads as a line rather than as part of the panel
+  // border. The clamp is belt and braces: a stale range must never let a
+  // trace escape its own canvas.
+  const PAD = 3;
+  const y = db => Math.max(PAD, Math.min(H - PAD,
+                  (H - PAD) - ((db - dbLo)/span)*(H - 2*PAD)));
+
+  // Recessive grid: present enough to read a level from, never competing
+  // with the traces.
+  c.strokeStyle = '#1e2a38'; c.lineWidth = 1;
+  for (let k=1;k<4;k++){
+    const yy = Math.round(H*k/4)+0.5;
+    c.beginPath(); c.moveTo(0,yy); c.lineTo(W,yy); c.stroke();
+  }
+
+  const trace = (arr, colour, width) => {
+    c.strokeStyle = colour; c.lineWidth = width; c.beginPath();
+    for (let i=0;i<s.n;i++){
+      const xx = i/(s.n-1)*W, yy = y(arr[i]);
+      i ? c.lineTo(xx,yy) : c.moveTo(xx,yy);
+    }
+    c.stroke();
+  };
+  trace(s.mn, getCss('--min'), 1);
+  trace(s.mx, getCss('--max'), 1);
+  trace(s.av, getCss('--avg'), 2);      // the headline series is the thick one
+  p._stats = s;
+}
+
+const cssCache = {};
+function getCss(v){
+  return cssCache[v] || (cssCache[v] =
+    getComputedStyle(document.documentElement).getPropertyValue(v).trim());
+}
+
+function attachHover(p){
+  const tip = $('tip');
+  p.pg.addEventListener('mousemove', e => {
+    const h = hist.get(p.node), s = p._stats;
+    if (!h || !s) return;
+    const r = p.pg.getBoundingClientRect();
+    const i = Math.max(0, Math.min(s.n-1,
+      Math.round((e.clientX - r.left)/r.width*(s.n-1))));
+    const fc = h.meta.fc_hz, fs = h.meta.fs_sps;
+    const f = (fc - fs/2 + (i/(s.n-1))*fs)/1e6;
+    tip.style.display = 'block';
+    tip.style.left = Math.min(window.innerWidth-190, e.clientX+12)+'px';
+    tip.style.top  = (e.clientY+12)+'px';
+    tip.textContent =
+      `${p.node}  ${f.toFixed(3)} MHz\n` +
+      `max ${s.mx[i].toFixed(1)} dB\n` +
+      `avg ${s.av[i].toFixed(1)} dB\n` +
+      `min ${s.mn[i].toFixed(1)} dB`;
+    // Crosshair, redrawn over the traces
+    drawPeriodogram(p, h);
+    const c = p.pctx, x = i/(s.n-1)*p.pg.width;
+    c.strokeStyle = '#65798f'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(x+0.5,0); c.lineTo(x+0.5,p.pg.height); c.stroke();
+  });
+  p.pg.addEventListener('mouseleave', () => { $('tip').style.display='none'; });
+}
+
+function render(){
+  // Sorted by RSSI, strongest first: "which sensor is closest" should be the
+  // top-left panel, not something you hunt for.
+  const live = [...hist.entries()].filter(([,h]) => h.rows.length);
+  if (live.length) $('empty').style.display = 'none';
+
+  // Align the whole grid to ONE dwell before drawing. Each node's newest
+  // frame is from whenever it last reported, and a fleet retuning every
+  // 0.35 s while this repaints at 4 Hz means those frames come from
+  // different channels -- so the grid showed n06 at 2412 beside n02 at
+  // 2462 and read as an uncoordinated fleet, which is the precise opposite
+  // of what the coordinator is doing. Pick the channel most nodes last
+  // reported, then show every node's newest frame ON THAT CHANNEL.
+  const tally = new Map();
+  for (const [,h] of live){
+    const f = h.fc[h.fc.length-1] || 0;
+    tally.set(f, (tally.get(f)||0) + 1);
+  }
+  let followFc = 0, best = -1;
+  for (const [f,c] of tally) if (c > best){ best = c; followFc = f; }
+
+  let fleetFc = followFc;
+  const prevView = viewFc;
+  if (chanMode === 'strong'){
+    // Strongest channel by the best RSSI any node has seen on it recently.
+    // Re-evaluated on a timer so it cannot flap between two similar bands.
+    if (performance.now() - heldAt > HOLD_MS || !heldFc){
+      const perCh = new Map();
+      for (const [,h] of live){
+        const lo = Math.max(0, h.fc.length - 240);
+        for (let i=lo;i<h.fc.length;i++){
+          const f = h.fc[i], r = h.rssi[i] ?? -999;
+          if (!(perCh.get(f) >= r)) perCh.set(f, r);
+        }
+      }
+      let bf = 0, br = -1e9;
+      for (const [f,r] of perCh) if (r > br){ br = r; bf = f; }
+      if (bf){ heldFc = bf; heldAt = performance.now(); }
+    }
+    fleetFc = heldFc || followFc;
+  } else if (chanMode !== 'follow'){
+    fleetFc = chanKey(+chanMode) || followFc;
+  }
+  viewFc = fleetFc;
+  // A channel change resets the spacing estimate; do not let it retrigger a
+  // resize on the next render.
+  if (viewFc !== prevView) rowsAt = performance.now();
+
+  // Median spacing between frames on the displayed channel -> row count.
+  let dts = [];
+  for (const [,h] of live){
+    let prev = null;
+    for (let i=Math.max(0,h.fc.length-40); i<h.fc.length; i++){
+      if (fleetFc && h.fc[i] !== fleetFc) continue;
+      if (prev !== null) dts.push(h.ts[i] - prev);
+      prev = h.ts[i];
+    }
+  }
+  // Commit a new row count rarely, and only when it is a real change.
+  //
+  // Recomputing this every render made the waterfall pump: the same history
+  // stretched over a different number of rows changes the height of the
+  // filled block, so it grew and shrank a few times a second. The median
+  // itself is noisy at these sample counts, and under "strongest" the
+  // channel can switch, which resets the spacing estimate outright.
+  //
+  // 20% hysteresis on a 6 s timer: a genuine change (staring -> scanning,
+  // or a different burst rate) still lands within seconds, and ordinary
+  // jitter never moves it.
+  if (dts.length > 4 && performance.now() - rowsAt > 6000){
+    dts.sort((a,b)=>a-b);
+    const dt = dts[dts.length>>1] || 0.5;
+    const want = Math.max(24, Math.min(180, Math.round(WF_TARGET_S / dt)));
+    if (Math.abs(want - WF_ROWS) / WF_ROWS > 0.20){
+      WF_ROWS = want;
+      rowsAt = performance.now();
+    }
+  }
+  for (const [,h] of live){
+    let i = h.fc.length - 1;
+    while (i > 0 && h.fc[i] !== fleetFc) i--;
+    h.view = (h.fc[i] === fleetFc) ? i : h.fc.length - 1;
+    // A node with nothing RECENT on the fleet's channel -- one radio retuned
+    // on its own, e.g. a hardware node aimed at a test emitter -- is drawn on
+    // its own newest channel. Filtering it to the fleet's channel would leave
+    // it no frames, and an empty panel reads as a dead sensor. "Recent" is
+    // three scan cycles, so a scanning fleet node, which revisits every
+    // channel once per cycle, never trips it; and stale frames from before a
+    // retune do not keep a node pinned to a channel it has left.
+    const recent = 3 * Math.max(1, scanPlan.length);
+    let onFleet = false;
+    for (let k = h.fc.length - 1; k >= Math.max(0, h.fc.length - recent); k--)
+      if (h.fc[k] === fleetFc){ onFleet = true; break; }
+    h.panelFc = onFleet ? fleetFc : h.fc[h.fc.length - 1];
+  }
+
+  // Slow mean RSSI over the retained history, so a node's rank reflects how
+  // loud it usually is rather than which channel the fleet happens to be on
+  // this instant.
+  const now = performance.now();
+  if (now - orderAt > ORDER_HOLD_MS || orderMap.size !== live.length){
+    const mean = live.map(([node,h]) => {
+      const k = Math.min(h.rssi ? h.rssi.length : 0, 64);
+      const arr = (h.rssi || []).slice(-Math.max(k,1));
+      const m = arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length
+                           : (h.meta.rssi_dbm ?? -999);
+      return [node, m];
+    });
+    mean.sort((a,b) => b[1]-a[1]);
+    orderMap = new Map(mean.map(([node],i) => [node,i]));
+    orderAt = now;
+  }
+  // DOM order stays as created. Only the rank LABEL moves.
+  live.sort((a,b) => a[0] < b[0] ? -1 : 1);
+
+  // Stats first, then the range, then draw. The order matters: the shared
+  // range has to be derived from the traces it will have to contain.
+  const st = new Map();
+  for (const [node,h] of live) st.set(node, stats(h, avgWindowS, h.panelFc));
+  rescale(st);
+
+  live.forEach(([node,h], rank) => {
+    const p = ensurePanel(node);
+    p.el.classList.toggle('used', used.has(node));
+    p.el.classList.toggle('hw', !!h.meta.hw);
+    const vi = h.view ?? (h.rows.length - 1);
+    const vSnr = h.snr[vi] ?? -99, vRssi = h.rssi[vi] ?? 0;
+    const vFc = h.fc[vi] || h.meta.fc_hz, vCls = h.cls[vi] || 'unknown';
+    p.el.classList.toggle('quiet', vSnr < threshDb);
+    p.el.querySelector('[data-rssi]').textContent =
+      vRssi.toFixed(1) + ' dBm';
+    p.el.querySelector('[data-snr]').textContent =
+      vSnr.toFixed(1) + ' dB';
+    const b = p.el.querySelector('[data-used]');
+    b.textContent = used.has(node) ? 'in fix' : vCls;
+    b.classList.toggle('on', used.has(node));
+    const fc = vFc/1e6, fs = h.meta.fs_sps/1e6;
+    p.el.querySelector('[data-f0]').textContent = (fc-fs/2).toFixed(2);
+    p.el.querySelector('[data-fc]').textContent = fc.toFixed(3)+' MHz';
+    p.el.querySelector('[data-f1]').textContent = (fc+fs/2).toFixed(2);
+    drawWaterfall(p, h, h.panelFc);
+    drawPeriodogram(p, h, st.get(node));
+  });
+
+  // What the fleet is covering, stated once rather than inferred from the
+  // panels -- which now deliberately do NOT follow the scan.
+  let scanSpan = 'not scanning';
+  if (scanPlan.length > 1){
+    const fcs = scanPlan.map(c => c.fc_hz), fs = scanPlan[0].fs_sps || 0;
+    const lo = (Math.min(...fcs) - fs/2)/1e6, hi = (Math.max(...fcs) + fs/2)/1e6;
+    scanSpan = `scan ${lo.toFixed(0)}–${hi.toFixed(0)} MHz, `
+             + `${scanPlan.length}×${scanDwellS}s, revisit `
+             + `${(scanPlan.length*scanDwellS).toFixed(2)}s`;
+  }
+  const any = live.length ? st.get(live[0][0]) : null;
+  const per = any ? `${any.cnt} frames / ${any.span.toFixed(0)} s` : '—';
+  $('meta').textContent =
+    `${live.length} node${live.length===1?'':'s'} · `+
+    (fleetFc ? `showing ${(fleetFc/1e6).toFixed(3)} MHz · ` : '')+
+    (scanSpan ? `${scanSpan} · ` : '')+
+    `min/avg/max over ${per} · `+
+    `scale ${dbLo}…${dbHi} dB, shared across panels`;
+}
+
+// Paint the ramp swatch from the same LUT the waterfall uses, so the legend
+// cannot drift from the data -- including after a colourmap change.
+function paintRamp(){
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 1;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(256,1);
+  for (let i=0;i<256;i++){
+    img.data[i*4] = LUT[i*3]; img.data[i*4+1] = LUT[i*3+1];
+    img.data[i*4+2] = LUT[i*3+2]; img.data[i*4+3] = 255;
+  }
+  ctx.putImageData(img,0,0);
+  $('ramp').style.background = `url(${c.toDataURL()}) center/100% 100%`;
+}
+paintRamp();
+
+// Controls. Both persist, because a second-monitor dashboard gets reloaded
+// and nobody wants to re-pick their colourmap every time.
+$('win').value = String(avgWindowS);
+$('win').addEventListener('change', e => {
+  avgWindowS = +e.target.value;
+  localStorage.setItem('dl.win', avgWindowS);
+  schedule();
+});
+$('chan').addEventListener('change', e => {
+  chanMode = e.target.value;
+  localStorage.setItem('dl.chan', chanMode);
+  heldFc = 0;
+  schedule();
+});
+$('cmap').value = cmapName;
+$('cmap').addEventListener('change', e => {
+  cmapName = e.target.value;
+  localStorage.setItem('dl.cmap', cmapName);
+  LUT = buildLut(cmapName);
+  paintRamp();
+  schedule();
+});
+
+// Repaint at most RENDER_HZ. Ten nodes at 2 bursts/s is twenty frames a
+// second, each redrawing every panel in full; the display cannot show that
+// and the attempt is what makes it stutter.
+const RENDER_MS = 250;
+let dirty = false, lastRender = 0;
+function schedule(){
+  if (dirty) return;
+  dirty = true;
+  const wait = Math.max(0, RENDER_MS - (performance.now() - lastRender));
+  setTimeout(() => requestAnimationFrame(() => {
+    dirty = false; lastRender = performance.now(); render();
+  }), wait);
+}
+
+const es = new EventSource('/spec/events');
+es.onmessage = e => {
+  let m; try { m = JSON.parse(e.data); } catch { return; }
+  if (m.type === 'init'){
+    nodeOrder = m.nodes || [];
+    if (typeof m.thresh_db === 'number') threshDb = m.thresh_db;
+    scanPlan = m.plan || []; scanDwellS = m.dwell_s || 0;
+    // With no dwell plan there is one channel, so "strongest", "follow" and
+    // naming it are all the same choice. Offering three ways to pick the
+    // only option reads as a broken control rather than an idle one.
+    const sel = $('chan');
+    if (scanPlan.length > 1){
+      sel.disabled = false;
+      sel.innerHTML = '<option value="strong">strongest</option>'
+                    + '<option value="follow">follow scan</option>'
+                    + scanPlan.map(c =>
+                        `<option value="${c.fc_hz}">${(c.fc_hz/1e6).toFixed(0)} MHz</option>`
+                      ).join('');
+      sel.value = chanMode;
+      if (sel.selectedIndex < 0){ sel.value = 'strong'; chanMode = 'strong'; }
+    } else {
+      sel.disabled = true;
+      sel.innerHTML = '<option>single channel</option>';
+      chanMode = 'strong';
+    }
+    used = new Set(m.used || []);
+    for (const [node, rows] of Object.entries(m.history || {}))
+      for (const r of rows) push(r);
+    schedule();
+  } else if (m.type === 'spec'){
+    push(m.row);
+    used = new Set(m.used || []);
+    schedule();
+  }
+};
+window.addEventListener('resize', schedule);
+</script>

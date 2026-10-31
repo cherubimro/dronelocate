@@ -1,0 +1,10 @@
+parking-angle 10 config.parking_angle_deg=10.0
+parking-angle -20 config.parking_angle_deg=-20.0
+parking-angle 0 config.parking_angle_deg=0.0
+mode custom setup.use_mode=custom
+scan-speed 2 setup_extended.scan_speed=2
+scan-speed 3 setup_extended.scan_speed=3
+scan-speed 1 setup_extended.scan_speed=1
+target-expansion 3 setup.target_expansion=3
+target-expansion 1 setup.target_expansion=1
+mode bird setup.use_mode=bird

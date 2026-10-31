@@ -1,0 +1,60 @@
+    4.0s  === E1/E2/E3/E5 on range A
+    6.2s  A [before] transmit_sessions 9 tx_hours 6 C407 tx_snapshot [411561, 183229, -37081] range_params ['0x6000', '0x14000']
+    7.5s  A: transmit -> status transmit
+   27.5s  E1 no NKOE:           offset median 43308.3 ms, sd 0.35 ms, n 377
+   47.5s  E1 NKOE epoch +0 s:   offset median 43307.9 ms, sd 0.34 ms, n 377
+   67.5s  E1 NKOE epoch +30 s:  offset median 43307.6 ms, sd 0.38 ms, n 377
+   68.0s  A: standby -> status standby
+   71.2s  A [after 60 s transmit] transmit_sessions 9 tx_hours 6 C407 tx_snapshot [411561, 183229, -37081] range_params ['0x6000', '0x14000']
+  189.5s  A: transmit -> status transmit
+  202.5s  E1 after 120 s pause: offset median 43304.6 ms, sd 0.33 ms, n 221
+  202.6s  E5: sent 0d c2
+  205.6s  A: set doppler-speed 3
+  209.7s  A: set doppler-speed 2
+  213.7s  E5: C415 reports received 1
+  213.7s      C415 at 202.5s: 15 c4 00 00 00 00 00 00 00 00 00 00 00 00 00
+  250.6s  A: standby -> status standby
+  253.0s  A [after second 60 s transmit] transmit_sessions 9 tx_hours 6 C407 tx_snapshot [411561, 183229, -37081] range_params ['0x6000', '0x14000']
+  253.0s  E2: C407 deltas: first cycle [0, 0, 0], second cycle [0, 0, 0] (first transmit 60 s; second: 120 s pause + 60 s transmit)
+  253.0s  E3: transmit_sessions 9 -> 9 -> 9
+  253.0s  === E4 b/c: range A in custom mode, scan speed levels and ranges
+  253.0s  A: set mode custom
+  256.1s  A: transmit -> status transmit
+  256.2s  A: set scan-speed 0
+  265.6s  [custom scan-speed 0, 75 m] A: C408 22.0 rpm, scan_speed 0, wraps 22.0 rpm
+  265.6s  A: set scan-speed 1
+  275.6s  [custom scan-speed 1, 75 m] A: C408 31.9 rpm, scan_speed 1, wraps 31.9 rpm
+  275.7s  A: set scan-speed 2
+  285.5s  [custom scan-speed 2, 75 m] A: C408 40.8 rpm, scan_speed 2, wraps 40.8 rpm
+  285.5s  A: set scan-speed 3
+  295.5s  [custom scan-speed 3, 75 m] A: C408 47.4 rpm, scan_speed 3, wraps 47.4 rpm
+  295.6s  A: set range 250
+  305.6s  [custom scan-speed 3, range 250 m] A: C408 46.7 rpm, scan_speed 3, wraps 46.7 rpm
+  305.6s  A: set range 1000
+  315.6s  [custom scan-speed 3, range 1000 m] A: C408 48.8 rpm, scan_speed 3, wraps 48.8 rpm
+  315.7s  A: set range 3000
+  325.5s  [custom scan-speed 3, range 3000 m] A: C408 37.8 rpm, scan_speed 3, wraps 37.8 rpm
+  325.5s  A: set range 75
+  325.6s  A: set scan-speed 1
+  330.5s  A: standby -> status standby
+  330.5s  A: set mode bird
+  333.5s  === E4 a: who sets the antenna speed with both ranges transmitting
+  333.6s  A: set mode offshore
+  333.6s  B: set mode bird
+  338.1s  A: transmit -> status transmit
+  348.1s  [A offshore alone] A: C408 30.3 rpm, scan_speed 1, wraps 30.3 rpm
+  348.8s  B: transmit -> status transmit
+  360.6s  [A offshore + B bird (B started last)] A: C408 31.2 rpm, scan_speed 1, wraps 31.2 rpm | B: C408 31.2 rpm, scan_speed 0, wraps 31.2 rpm
+  361.3s  A: standby -> status standby
+  370.5s  [B bird alone] B: C408 23.6 rpm, scan_speed 0, wraps 23.6 rpm
+  370.9s  A: transmit -> status transmit
+  381.3s  [A offshore + B bird (A started last)] A: C408 30.6 rpm, scan_speed 1, wraps 30.6 rpm | B: C408 30.6 rpm, scan_speed 0, wraps 30.6 rpm
+  381.3s  === restore
+  382.8s  A: standby -> status standby
+  384.7s  B: standby -> status standby
+  384.7s  A: set mode bird
+  384.8s  A: set range 75
+  384.8s  A: set doppler-speed 2
+  384.9s  B: set mode offshore
+  384.9s  B: set range 115
+  389.7s  recorded 15708 packets, 133 MB

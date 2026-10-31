@@ -1,0 +1,11 @@
+sea auto+0 setup_extended.auto_sea_offset=0
+sea 2 setup_extended.sea_clutter=2
+bearing-alignment 1 config.bearing_alignment_deg=1.0
+bearing-alignment 0 config.bearing_alignment_deg=0.0
+antenna-height 2.5 config.antenna_height_m=2.5
+antenna-height 2 config.antenna_height_m=2.0
+antenna-offset 1,0.5 installation.antenna_forward_mm=1000
+antenna-offset 0,0 installation.antenna_forward_mm=0
+no-transmit-sector 1:170:190
+no-transmit-sector 1:10:20:off
+no-transmit-sector 1:170:190:off

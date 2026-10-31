@@ -1,0 +1,155 @@
+{
+  "site": "field1",
+  "origin": {
+    "lat": 45.7489,
+    "lon": 21.2087,
+    "alt_m": 90.0
+  },
+  "_comment_origin": "PLACEHOLDER copied from site.json (Timisoara centre). The frame is centred on the radar pedestal at the field site: replace lat/lon/alt_m with its RTK survey before field use. Until then ENU geometry is right and every lat/lon is offset.",
+  "_comment_geometry": "Planned layout, not surveyed: four corners at deliberately unequal ranges around a flight box E -400..400 m, N 400..1100 m in front of the radar, plus n05 on the ground UNDER the box centre. Overhead beats high: n05 there takes median VDOP from ~138 (four ground corners) to ~10, while the same node on a 25 m roof or on the radar mast is worse. Do not square the corners up symmetrically -- VDOP goes to infinity at the centre of a symmetric square. Replace every enu with the RTK survey.",
+  "nodes": [
+    {
+      "id": "n01",
+      "enu": [
+        -500.0,
+        200.0,
+        3.0
+      ],
+      "role": "hw",
+      "gain_db": 60
+    },
+    {
+      "id": "n02",
+      "enu": [
+        500.0,
+        300.0,
+        3.0
+      ],
+      "role": "hw",
+      "gain_db": 60
+    },
+    {
+      "id": "n03",
+      "enu": [
+        -400.0,
+        1250.0,
+        3.0
+      ],
+      "role": "hw",
+      "gain_db": 60
+    },
+    {
+      "id": "n04",
+      "enu": [
+        450.0,
+        1150.0,
+        3.0
+      ],
+      "role": "hw",
+      "gain_db": 60
+    },
+    {
+      "id": "n05",
+      "enu": [
+        50.0,
+        720.0,
+        3.0
+      ],
+      "role": "hw",
+      "gain_db": 60
+    }
+  ],
+  "_comment_n05": "Delete n05 for the four-node run. min_nodes is 4 so the solver keeps fixing through a single dropout with five, and still solves at all with four -- the shipped default of 5 silently drops every four-node burst (supernode.py _reaper).",
+  "radio": {
+    "fc_hz": 2437000000,
+    "fs_sps": 20000000,
+    "bw_hz": 18000000,
+    "snippet_s": 0.01,
+    "wire_fmt": "ci8",
+    "detect_threshold_db": 8.0,
+    "_comment": "TinyB210 profile. AD9361 ceiling is 56 MHz; two channels over USB3 realistically sustains 30-40 Msps combined, so 20 Msps per channel is the safe planning number. 10 ms at 20 Msps = 400 KB per snippet in ci8.",
+    "channelize": {
+      "enabled": false,
+      "channels": 8,
+      "decim": 8,
+      "min_ratio": 4.0
+    },
+    "_comment_channelize": "Wideband capture + hop channelization: digitize the whole span, find which channel carried the burst, downconvert to it. Nodes snap to a shared grid so they agree without exchanging a message, and the uplink drops by `decim`. OFF here on purpose -- this profile targets an 18 MHz video downlink, and decimating an 18 MHz signal to 2.5 MHz discards it rather than isolating it (measured: 0.26 m -> 418 m horizontal). Enable it only against a NARROWBAND hopping target, and only with decim small enough that fs/decim still exceeds bw_hz -- node.py refuses the combination otherwise. Channelization buys coverage of a hopping emitter; bandwidth buys timing precision and multipath resolution. They trade against each other; pick per target."
+  },
+  "solver": {
+    "alt_prior_m": 100.0,
+    "alt_prior_sigma_m": 100.0,
+    "min_nodes": 4,
+    "max_nodes": 5,
+    "group_window_ms": 500,
+    "quality_gate": true,
+    "quality_min": 8.0,
+    "robust": true,
+    "_comment_robust": "quality_gate drops a correlation whose peak does not stand out from the noise floor -- a LOST peak is wrong by microseconds and timing_sigma() cannot express that, so it hands garbage nearly full weight. robust applies Huber IRLS so an outlier that still gets through cannot dominate. Both are live-switchable from the console.",
+    "caf": true,
+    "caf_vmax_mps": 60.0,
+    "_comment_caf": "On real hardware the CAF is not optional: every emitter moves and every LO differs. 20 Msps halves the per-sample Doppler sensitivity but the 5.8 GHz band more than doubles it back; the span scales from the event's fc.",
+    "all_pairs": true,
+    "tight_coupling": true,
+    "gcc": "ht",
+    "_comment_prior": "Deliberately wide and NOT the planned flight altitude. With four ground-level nodes the vertical is unobservable and the reported altitude is the prior itself; a prior centred on the flight altitude makes the vertical look excellent without measuring anything. Keep it wide when reporting accuracy.",
+    "_comment_window": "500 ms instead of 400 to absorb LTE latency spread between the field nodes.",
+    "tight_min_nodes": 3,
+    "_comment_tight_min": "A burst heard by only 3 nodes (one of four dropped out) cannot fix but its 3 pairs still update an existing track through tight coupling. Without this, min_nodes 4 drops it in _reaper before correlation, and only the radar keeps the track."
+  },
+  "hardware": {
+    "driver": "uhd",
+    "device_args": "type=b200",
+    "channels": [
+      0,
+      1
+    ],
+    "gain_db": 60,
+    "_comment_gain": "TinyB210 needs ~60 dB: measured 2026-10-26 on two boards, the noise floor is flat up to ~40 dB of gain (-65.7 -> -60.2 dBFS: the converter's own noise dominates) and rises ~0.9 dB/dB above it (-44 dBFS at 60, -29 at 76). At 32-40 dB weak signals sit under that masking floor: 15-20 dB of sensitivity lost. At 60 a Wi-Fi router ~1 m away peaked at 67% of full scale, so 60 leaves headroom for a drone at range; lower it per node (node gain_db) only if hw_selftest reports clipping.",
+    "require_gps": true,
+    "gps_timeout_s": 180,
+    "array_baseline_m": 0.061,
+    "_comment_baseline": "61 mm is lambda/2 at 2.437 GHz, the widest spacing that keeps a two-element bearing unambiguous. Wider buys precision and costs uniqueness; phase_bearing() will enumerate the grating lobes rather than silently pick one.",
+    "cal_phase_rad": 0.0,
+    "_comment_cal": "Per-board constant, and 0.0 is a placeholder rather than a measurement: every bearing carries an unknown constant offset until this is set. Split one source into both inputs, run hw_selftest.py --channels 0,1, and paste the reported phase delta here. Full procedure, including the cable-swap that separates board offset from cable mismatch and the retune hazard that decides whether one calibration survives scanning: docs/splitter_calibration.md",
+    "timing_sigma_ns": 15.0,
+    "_comment_timing": "Default value, not a measurement. Replace with the per-pair sigma from the splitter test (one emitter split to every node, expected TDOA 0)."
+  },
+  "capture": {
+    "mode": "scheduled",
+    "_comment": "scheduled = supernode names an absolute UTC instant and every node opens its window there. Only possible because UHD exposes PPS-referenced timestamps; with RTL-SDR or HackRF you must fall back to mode 'independent' plus reference-emitter calibration.",
+    "schedule_lead_s": 0.5,
+    "rate_hz": 2.0
+  },
+  "radars": [
+    {
+      "id": "r01",
+      "kind": "navico_halo",
+      "model": "HALO 20+",
+      "ip": "192.168.100.231",
+      "scanners": [
+        "A"
+      ],
+      "enu": [
+        0.0,
+        0.0,
+        6.0
+      ],
+      "az_offset_deg": null,
+      "beam_h_deg": 4.6,
+      "beam_v_deg": 25.0
+    }
+  ],
+  "_comment_radars": "Read by the supernode (radar status, fusion) and by radarnode.py. Origin is the pedestal, antenna height 6 m is a placeholder, az_offset_deg (true bearing of the radar's spoke 0) is null until calibrated -- and while it is null the supernode reports the radar 'not calibrated' and fuses nothing from it, rather than guessing a bearing. beam_h_deg is 4.6 per the radar's own 0xC40A report (4.9 was the datasheet figure).",
+  "fusion": {
+    "lag_s": 1.0,
+    "radar_timeout_s": 3.0,
+    "fov_elev_deg": 9.0,
+    "confirm_m": 3,
+    "confirm_n": 4,
+    "confirm_m_doppler": 2,
+    "confirm_n_doppler": 3,
+    "delete_misses": 4,
+    "_comment": "Track-layer fusion (dronelocate/fusion.py; every key there has a default and a reason). lag_s is the reorder window radar plots and TDOA fixes are merged in -- paid only while a calibrated radar is publishing; with none it is 0 and the track layer is the old TDOA-only one. fov_elev_deg is the radar's GOOD vertical sensitivity (HALO fan +/-12.5, good to ~9): no miss is counted outside it, so a drone overhead coasts instead of being deleted. Radar-only tracks confirm on confirm_m of confirm_n scans (the Doppler rule if the radar flags them as moving) and die after delete_misses consecutive in-view misses with no TDOA support."
+  }
+}

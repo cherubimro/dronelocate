@@ -1,0 +1,9 @@
+eclipse-zenoh>=1.9.0
+numpy>=1.24
+scipy>=1.10
+cbor2>=5.4
+# The Navico HALO protocol client (navico.py) for radarnode.py is NOT a pip
+# dependency: it is vendored as a git subtree under testradar/ together with
+# the radar console and recordings, and found via dronelocate/vendor.py.
+# optional: cupy-cuda12x   (GPU correlation)
+# optional: SoapySDR       (system package, not pip: apt install python3-soapysdr)

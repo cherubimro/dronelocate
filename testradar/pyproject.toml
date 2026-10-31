@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "testradar"
+version = "0.1.0"
+description = "Navico HALO radar toolkit: protocol client, CLI, recordings, bench tools"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "AGPL-3.0-or-later"}
+dependencies = []          # navico.py is stdlib only
+
+[project.scripts]
+navico = "navico:main"
+
+[tool.setuptools]
+# Only the protocol client is installed. The web viewer, tests, recordings
+# and experiments are used from a checkout of this repository.
+py-modules = ["navico"]
